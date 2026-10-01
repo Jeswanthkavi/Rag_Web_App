@@ -31,7 +31,6 @@ class Message(Base):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
-        index=True,
     )
     conversation_id: Mapped[str] = mapped_column(
         String(36),

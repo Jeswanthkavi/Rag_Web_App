@@ -19,7 +19,6 @@ class DocumentChunk(Base, TimestampMixin):
         String(36),
         primary_key=True,
         default=lambda: str(uuid.uuid4()),
-        index=True,
     )
     document_id: Mapped[str] = mapped_column(
         String(36),

@@ -4,10 +4,12 @@ import pytest
 from typing import Generator
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from alembic.config import Config
+from alembic import command
 from backend.app.core.config import get_settings
 from backend.app.db.base import Base
 from backend.app.db.session import create_db_engine, create_session_factory
-# Ensure all models are imported so Base.metadata is fully populated
+# Ensure all models are imported
 from backend.app.models import (
     User,
     Document,
@@ -28,14 +30,24 @@ def test_engine() -> Generator[Engine, None, None]:
     
     engine = create_db_engine(test_db_url)
     
-    # Create all schema tables on the test database
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    # Run Alembic migration to ensure test database matches latest migration revision
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", test_db_url)
+    
+    try:
+        command.downgrade(alembic_cfg, "base")
+    except Exception:
+        Base.metadata.drop_all(bind=engine)
+        
+    command.upgrade(alembic_cfg, "head")
     
     yield engine
     
     # Clean up test schema tables after entire test session completes
-    Base.metadata.drop_all(bind=engine)
+    try:
+        command.downgrade(alembic_cfg, "base")
+    except Exception:
+        Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
 
