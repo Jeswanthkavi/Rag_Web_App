@@ -1,11 +1,12 @@
 """Document Management API Endpoints (Upload, List, Get, Delete)."""
 
 from typing import Optional
-from fastapi import APIRouter, Depends, File, UploadFile, Query, status
+from fastapi import APIRouter, Depends, File, UploadFile, Query, BackgroundTasks, status
 from backend.app.api.dependencies import get_current_active_user, get_document_service
 from backend.app.models.user import User
 from backend.app.services.document_service import DocumentService
 from backend.app.schemas.document import DocumentResponse, DocumentListResponse
+from backend.app.ingestion.service import run_document_ingestion
 
 router = APIRouter()
 
@@ -15,15 +16,20 @@ router = APIRouter()
     response_model=DocumentResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Upload a new document",
-    description="Uploads a PDF, DOCX, or TXT document (max 25MB). Validates content, stores safely, and catalogs metadata as PENDING.",
+    description="Uploads a PDF, DOCX, or TXT document (max 25MB). Validates content, stores safely, catalogs metadata as PENDING, and triggers background text extraction.",
 )
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="Document file to upload (.pdf, .docx, .txt)"),
     current_user: User = Depends(get_current_active_user),
     doc_service: DocumentService = Depends(get_document_service),
 ) -> DocumentResponse:
-    """Handles secure file upload with tenancy isolation."""
+    """Handles secure file upload with tenancy isolation and schedules background ingestion."""
     doc = await doc_service.upload_document(user=current_user, file=file)
+    
+    # Schedule asynchronous document extraction and normalization
+    background_tasks.add_task(run_document_ingestion, doc.id, current_user.id)
+    
     return DocumentResponse.model_validate(doc)
 
 
@@ -55,7 +61,7 @@ def list_documents(
     response_model=DocumentResponse,
     status_code=status.HTTP_200_OK,
     summary="Get document details",
-    description="Retrieves metadata for a specific document owned by the authenticated user.",
+    description="Retrieves metadata and processing status for a specific document owned by the authenticated user.",
 )
 def get_document(
     document_id: str,
