@@ -1,4 +1,4 @@
-"""Document Ingestion Service coordinating extraction, normalization, and status transitions."""
+"""Document Ingestion Service coordinating extraction, normalization, chunking, and status transitions."""
 
 import logging
 from pathlib import Path
@@ -12,18 +12,22 @@ from backend.app.ingestion.pdf_extractor import PDFExtractor
 from backend.app.ingestion.docx_extractor import DOCXExtractor
 from backend.app.ingestion.txt_extractor import TXTExtractor
 from backend.app.ingestion.normalizer import TextNormalizer
+from backend.app.chunking.service import ChunkingService
 
 logger = logging.getLogger("app.ingestion")
 
 
 class IngestionService:
-    """Orchestrates document parsing, text extraction, and normalization."""
+    """Orchestrates document parsing, text extraction, normalization, and chunking."""
 
     _EXTRACTOR_REGISTRY: Dict[str, Type[BaseExtractor]] = {
         ".pdf": PDFExtractor,
         ".docx": DOCXExtractor,
         ".txt": TXTExtractor,
     }
+
+    def __init__(self, chunking_service: Optional[ChunkingService] = None):
+        self.chunking_service = chunking_service or ChunkingService()
 
     def get_extractor(self, file_type: str) -> BaseExtractor:
         """Returns the appropriate extractor for the file extension."""
@@ -94,21 +98,31 @@ class IngestionService:
                 file_type=document.file_type,
             )
 
-            # Update document record with successful metadata
+            # 4. Perform Chunking & Chunk Persistence
+            self.chunking_service.chunk_and_persist(
+                document=document,
+                extracted=extracted,
+                db=db,
+            )
+
+            # 5. Finalize document record
             document.status = DocumentStatus.COMPLETED
             document.page_count = extracted.total_pages
             document.error_message = None
             db.commit()
             db.refresh(document)
-            logger.info(f"Ingestion successful: Document {document_id} marked COMPLETED (pages: {document.page_count})")
+            logger.info(
+                f"Ingestion successful: Document {document_id} marked COMPLETED "
+                f"(pages: {document.page_count}, chunks: {document.total_chunks})"
+            )
             return document
 
         except Exception as e:
-            # 4. Handle and record sanitized failure
+            # 6. Handle and record sanitized failure
             db.rollback()
             sanitized_error = str(e).replace("\\", "/").split(":")[-1].strip()
             if not sanitized_error:
-                sanitized_error = "Extraction and normalization failed."
+                sanitized_error = "Extraction, normalization, or chunking failed."
 
             document.status = DocumentStatus.FAILED
             document.error_message = sanitized_error

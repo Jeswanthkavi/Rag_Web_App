@@ -32,21 +32,46 @@ User Query → Query Rewriting / History Enrichment → Dense Vector Query
 - **Storage**: Saved to structured local repository `storage/uploads/{user_id}/{document_uuid}/`.
 
 ### Stage 2: Text Extraction & Normalization
-- **PDF**: Page-by-page text extraction with layout and page number tracking.
-- **DOCX**: Paragraph and heading structure extraction.
+- **PDF**: Page-by-page text extraction with layout and page number tracking (`pypdf`).
+- **DOCX**: Paragraph and heading structure extraction (`python-docx`).
 - **TXT**: UTF-8 stream normalization.
-- **Normalization**: Unicode cleanup, removal of null bytes, newline normalization, and whitespace standardization.
+- **Normalization**: Unicode cleanup (NFKC), removal of null and control characters, newline standardization (`\r\n` / `\r` to `\n`), whitespace compression while strictly preserving paragraph boundaries (`\n\n`).
 
-### Stage 3: Configurable Chunking
-- Recursive character splitting with sliding token/character windows and overlap (default `chunk_size=500`, `chunk_overlap=50`).
-- Preservation of page metadata and section headings per chunk.
+### Stage 3: Hierarchical Document Chunking (Phase 8 Specification)
+- **Splitting Strategy**: Deterministic `RecursiveCharacterSplitter` using hierarchical natural boundary separators:
+  1. `\n\n` (Paragraph boundaries)
+  2. `\n` (Line boundaries)
+  3. `. ` (Period sentence boundaries)
+  4. `? ` (Question sentence boundaries)
+  5. `! ` (Exclamation sentence boundaries)
+  6. `; ` (Semicolon boundaries)
+  7. ` ` (Word boundaries)
+  8. `""` (Character fallback)
+- **Configurable Parameters**:
+  - `chunk_size`: `500` (Characters)
+  - `chunk_overlap`: `50` (Characters)
+  - Validation: `0 <= chunk_overlap < chunk_size`
+- **Units**: Character-based units for deterministic length bounding.
+- **Token-Count Strategy**: Approximated via deterministic whitespace token counting (`len(text.split())`) in Phase 8; Phase 9 introduces embedding model tokenizers.
+- **Page Boundaries & Citations**:
+  - **PDF**: Page boundaries are strictly preserved locally per page so that `page_number` in `DocumentChunk` directly points to the actual page (1-based index) for precise citation lookup.
+  - **TXT / DOCX**: `page_number` is set to `None` since reliable page numbers do not exist.
+- **Chunk Indexing**: 0-based deterministic sequential indexing (`0, 1, 2, ...`).
+- **Persistence & Idempotency**:
+  - Existing chunks for a document are atomically replaced inside a database transaction before new chunks are persisted.
+  - Updates `Document.total_chunks` to the exact count of generated chunks.
+  - Empty or whitespace documents produce 0 chunks (`total_chunks = 0`).
+  - Short documents (< `chunk_size`) produce exactly 1 chunk (`total_chunks = 1`).
+- **Phase 8 Boundary & Limitations**:
+  - `qdrant_point_id` remains `NULL` / `None`.
+  - Dense embeddings and Qdrant vector index insertion are not executed in Phase 8 (scheduled for Phase 9 and Phase 10).
 
-### Stage 4: Embedding Generation
+### Stage 4: Embedding Generation (Phase 9)
 - Embedding interface abstraction (`EmbeddingProvider` protocol).
 - Default: Local dense embeddings (`sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions) for zero-cost, high-speed local inference.
 - Configurable switch to remote providers.
 
-### Stage 5: Vector Store & Relational Indexing
+### Stage 5: Vector Store & Relational Indexing (Phase 10)
 - Qdrant batch upsert with structured payload (`user_id`, `document_id`, `chunk_id`, `page_number`, `chunk_index`, `filename`, `text`).
 - MySQL chunk catalog updated for relational queries.
 

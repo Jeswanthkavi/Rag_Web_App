@@ -11,8 +11,10 @@ from backend.app.db.session import get_db
 from backend.app.models.user import User
 from backend.app.repositories.user_repository import UserRepository
 from backend.app.repositories.document_repository import DocumentRepository
+from backend.app.repositories.document_chunk_repository import DocumentChunkRepository
 from backend.app.services.auth_service import AuthService
 from backend.app.services.document_service import DocumentService
+from backend.app.chunking.service import ChunkingService
 
 settings = get_settings()
 
@@ -30,6 +32,16 @@ def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
 def get_document_repository(db: Session = Depends(get_db)) -> DocumentRepository:
     """Dependency for providing an instance of DocumentRepository."""
     return DocumentRepository(db)
+
+
+def get_document_chunk_repository(db: Session = Depends(get_db)) -> DocumentChunkRepository:
+    """Dependency for providing an instance of DocumentChunkRepository."""
+    return DocumentChunkRepository(db)
+
+
+def get_chunking_service() -> ChunkingService:
+    """Dependency for providing an instance of ChunkingService."""
+    return ChunkingService()
 
 
 def get_auth_service(
