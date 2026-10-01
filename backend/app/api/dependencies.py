@@ -10,7 +10,9 @@ from backend.app.core.security import decode_access_token
 from backend.app.db.session import get_db
 from backend.app.models.user import User
 from backend.app.repositories.user_repository import UserRepository
+from backend.app.repositories.document_repository import DocumentRepository
 from backend.app.services.auth_service import AuthService
+from backend.app.services.document_service import DocumentService
 
 settings = get_settings()
 
@@ -25,11 +27,23 @@ def get_user_repository(db: Session = Depends(get_db)) -> UserRepository:
     return UserRepository(db)
 
 
+def get_document_repository(db: Session = Depends(get_db)) -> DocumentRepository:
+    """Dependency for providing an instance of DocumentRepository."""
+    return DocumentRepository(db)
+
+
 def get_auth_service(
     user_repo: UserRepository = Depends(get_user_repository),
 ) -> AuthService:
     """Dependency for providing an instance of AuthService."""
     return AuthService(user_repo)
+
+
+def get_document_service(
+    doc_repo: DocumentRepository = Depends(get_document_repository),
+) -> DocumentService:
+    """Dependency for providing an instance of DocumentService."""
+    return DocumentService(doc_repo)
 
 
 def get_current_user(
