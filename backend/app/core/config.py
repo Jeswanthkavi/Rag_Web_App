@@ -151,6 +151,7 @@ class EmbeddingSettings(BaseModel):
     )
     embedding_dimension: int = Field(default=384, ge=64, le=4096, description="Dimension of generated vectors")
     embedding_batch_size: int = Field(default=32, ge=1, le=256, description="Batch size for embedding generation")
+    normalize_embeddings: bool = Field(default=True, description="Whether to normalize dense embeddings")
 
 
 class RetrievalSettings(BaseModel):
@@ -249,6 +250,7 @@ class Settings(BaseSettings):
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_dimension: int = 384
     embedding_batch_size: int = 32
+    normalize_embeddings: bool = True
 
     # Retrieval
     chunk_size: int = 500
@@ -359,6 +361,7 @@ class Settings(BaseSettings):
             embedding_model_name=self.embedding_model_name,
             embedding_dimension=self.embedding_dimension,
             embedding_batch_size=self.embedding_batch_size,
+            normalize_embeddings=self.normalize_embeddings,
         )
 
     @property
@@ -439,6 +442,7 @@ class Settings(BaseSettings):
                 "provider": self.embedding_provider,
                 "model_name": self.embedding_model_name,
                 "dimension": self.embedding_dimension,
+                "normalize_embeddings": self.normalize_embeddings,
             },
             "retrieval": {
                 "chunk_size": self.chunk_size,

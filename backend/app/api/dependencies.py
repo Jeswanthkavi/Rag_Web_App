@@ -15,6 +15,7 @@ from backend.app.repositories.document_chunk_repository import DocumentChunkRepo
 from backend.app.services.auth_service import AuthService
 from backend.app.services.document_service import DocumentService
 from backend.app.chunking.service import ChunkingService
+from backend.app.embeddings.service import EmbeddingService
 
 settings = get_settings()
 
@@ -42,6 +43,11 @@ def get_document_chunk_repository(db: Session = Depends(get_db)) -> DocumentChun
 def get_chunking_service() -> ChunkingService:
     """Dependency for providing an instance of ChunkingService."""
     return ChunkingService()
+
+
+def get_embedding_service() -> EmbeddingService:
+    """Dependency for providing an instance of EmbeddingService."""
+    return EmbeddingService()
 
 
 def get_auth_service(

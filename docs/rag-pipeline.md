@@ -66,14 +66,25 @@ User Query → Query Rewriting / History Enrichment → Dense Vector Query
   - `qdrant_point_id` remains `NULL` / `None`.
   - Dense embeddings and Qdrant vector index insertion are not executed in Phase 8 (scheduled for Phase 9 and Phase 10).
 
-### Stage 4: Embedding Generation (Phase 9)
-- Embedding interface abstraction (`EmbeddingProvider` protocol).
-- Default: Local dense embeddings (`sentence-transformers/all-MiniLM-L6-v2`, 384 dimensions) for zero-cost, high-speed local inference.
-- Configurable switch to remote providers.
+### Stage 4: Dense Embedding Generation (Phase 9 Specification)
+- **Provider Interface Abstraction**: `BaseEmbeddingProvider` defines abstract contract (`provider_name`, `model_name`, `dimension`, `embed_text`, `embed_texts`, `validate_vector`, `validate_vectors`).
+- **Default Local Provider**: `LocalEmbeddingProvider` using `sentence-transformers/all-MiniLM-L6-v2` for high-throughput, zero-cost local dense inference.
+- **Model Loading & Lifecycle**:
+  - Model loaded lazily upon first invocation and cached on the provider instance.
+  - Avoids redundant per-chunk model instantiation.
+- **Vector Dimension**: `384` dimensions.
+- **Batch Processing**: Configurable `batch_size` (default `32`) ensuring positional 1:1 correspondence between input chunk sequences and output vectors.
+- **Normalization**: Configurable L2 unit-norm normalization (`normalize_embeddings=True`) ensuring unit length for direct cosine similarity calculations.
+- **Vector Validation**: Strictly checks that vectors are non-empty, match expected dimensions, contain numeric finite floating-point values, and match input batch lengths.
+- **Service Orchestration**: `EmbeddingService` coordinates provider selection, batch delegation, and converts `DocumentChunk` records into in-memory `ChunkEmbedding` data structures.
+- **Persistence Boundary**:
+  - Embeddings are **NOT** stored in MySQL (no JSON/BLOB vector columns).
+  - Qdrant indexing and collection creation are intentionally deferred to Phase 10.
+  - `DocumentChunk.qdrant_point_id` remains `NULL` / `None`.
 
 ### Stage 5: Vector Store & Relational Indexing (Phase 10)
 - Qdrant batch upsert with structured payload (`user_id`, `document_id`, `chunk_id`, `page_number`, `chunk_index`, `filename`, `text`).
-- MySQL chunk catalog updated for relational queries.
+- MySQL chunk catalog updated with `qdrant_point_id` for relational cross-referencing.
 
 ---
 
