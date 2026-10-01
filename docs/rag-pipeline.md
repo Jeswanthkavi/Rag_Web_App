@@ -82,9 +82,30 @@ User Query → Query Rewriting / History Enrichment → Dense Vector Query
   - Qdrant indexing and collection creation are intentionally deferred to Phase 10.
   - `DocumentChunk.qdrant_point_id` remains `NULL` / `None`.
 
-### Stage 5: Vector Store & Relational Indexing (Phase 10)
-- Qdrant batch upsert with structured payload (`user_id`, `document_id`, `chunk_id`, `page_number`, `chunk_index`, `filename`, `text`).
-- MySQL chunk catalog updated with `qdrant_point_id` for relational cross-referencing.
+### Stage 5: Qdrant Vector Storage & Indexing (Phase 10 Specification)
+- **Vector Database**: Qdrant running locally at `http://localhost:6333` with persistent Docker storage.
+- **Collection Configuration**:
+  - `collection_name`: Configurable (default `rag_document_chunks`).
+  - `dimension`: `384` (strictly aligned with `sentence-transformers/all-MiniLM-L6-v2`).
+  - `distance`: `Distance.COSINE`.
+  - `initialize_collection()`: Idempotently creates collection if missing and verifies dimensional/distance parameters if existing.
+- **Point ID Strategy**: Deterministic UUID string directly matching `DocumentChunk.id` to guarantee 1:1 relational correspondence and eliminate random ID drift.
+- **Payload Schema**:
+  - `document_id`: UUID of parent document
+  - `user_id`: Tenant identifier for search filtering
+  - `chunk_id`: Direct pointer to MySQL `DocumentChunk.id`
+  - `chunk_index`: Integer sequential order
+  - `page_number`: Integer for PDF pages, `None` for unpaged docs
+  - `filename`: Original document filename
+  - `file_type`: Extension (`.pdf`, `.docx`, `.txt`)
+  - `token_count`: Integer token estimate
+  - `chunk_text`: Extracted snippet for direct retrieval in Phase 11
+- **Tenant Isolation**: All Qdrant queries, point counts, and deletions enforce strict `user_id` field filters (`FieldCondition(key="user_id", match=MatchValue(value=user_id))`).
+- **Batch Upsert**: Configurable `qdrant_batch_size` (default `64`) independent from embedding batch size.
+- **Idempotency & Reindexing**: Purges existing document points in Qdrant before upserting fresh vectors to prevent orphaned chunks upon document modification.
+- **Deletion Synchronization**: Document deletion via `DocumentService` purges Qdrant vector points before deleting relational records and filesystem storage.
+- **Relational Synchronization**: MySQL `DocumentChunk.qdrant_point_id` is populated with the deterministic point ID upon successful Qdrant upsert.
+- **Phase 11 Boundary**: Semantic search, hybrid retrieval, and cross-encoder reranking are strictly deferred to Phase 11 and Phase 12.
 
 ---
 

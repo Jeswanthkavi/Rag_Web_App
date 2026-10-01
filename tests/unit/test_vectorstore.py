@@ -1,0 +1,197 @@
+"""Unit tests for VectorStore configuration, repository, and service with mocked Qdrant client."""
+
+import pytest
+from unittest.mock import MagicMock, patch
+from typing import List
+
+from qdrant_client.http import models as rest_models
+from backend.app.embeddings.base import BaseEmbeddingProvider
+from backend.app.embeddings.service import EmbeddingService
+from backend.app.models.document import Document, DocumentStatus
+from backend.app.models.document_chunk import DocumentChunk
+from backend.app.models.user import User
+from backend.app.vectorstore.config import VectorStoreConfig
+from backend.app.vectorstore.models import (
+    IndexingResult,
+    VectorPoint,
+    VectorStoreError,
+    VectorStoreHealth,
+)
+from backend.app.vectorstore.repository import QdrantVectorRepository
+from backend.app.vectorstore.service import VectorStoreService
+
+
+class MockEmbeddingProvider(BaseEmbeddingProvider):
+    @property
+    def provider_name(self) -> str:
+        return "mock"
+
+    @property
+    def model_name(self) -> str:
+        return "mock-embedding-model"
+
+    @property
+    def dimension(self) -> int:
+        return 4
+
+    def embed_text(self, text: str) -> List[float]:
+        return [0.1, 0.2, 0.3, 0.4]
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
+
+
+class TestVectorStoreConfig:
+    """Tests configuration loading and constraints."""
+
+    def test_default_config_valid(self):
+        cfg = VectorStoreConfig()
+        assert cfg.url == "http://localhost:6333"
+        assert cfg.collection_name == "rag_document_chunks"
+        assert cfg.dimension == 384
+        assert cfg.batch_size == 64
+
+    def test_invalid_config_raises(self):
+        with pytest.raises(ValueError, match="Qdrant URL cannot be empty"):
+            VectorStoreConfig(url="")
+
+        with pytest.raises(ValueError, match="collection_name cannot be empty"):
+            VectorStoreConfig(collection_name="")
+
+        with pytest.raises(ValueError, match="timeout must be positive"):
+            VectorStoreConfig(timeout=0)
+
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            VectorStoreConfig(batch_size=-10)
+
+        with pytest.raises(ValueError, match="dimension must be positive"):
+            VectorStoreConfig(dimension=0)
+
+
+class TestQdrantVectorRepositoryUnit:
+    """Unit tests for QdrantVectorRepository with mock client."""
+
+    def test_initialize_collection_creates_when_missing(self):
+        mock_client = MagicMock()
+        mock_client.collection_exists.return_value = False
+
+        repo = QdrantVectorRepository(client=mock_client, config=VectorStoreConfig(dimension=384))
+        result = repo.initialize_collection(collection_name="test_col")
+
+        assert result is True
+        mock_client.collection_exists.assert_called_once_with(collection_name="test_col")
+        mock_client.create_collection.assert_called_once()
+
+    def test_initialize_collection_verifies_existing_compatible(self):
+        mock_client = MagicMock()
+        mock_client.collection_exists.return_value = True
+
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = rest_models.VectorParams(
+            size=384,
+            distance=rest_models.Distance.COSINE,
+        )
+        mock_client.get_collection.return_value = mock_info
+
+        repo = QdrantVectorRepository(client=mock_client, config=VectorStoreConfig(dimension=384))
+        result = repo.initialize_collection(collection_name="test_col")
+
+        assert result is True
+        mock_client.create_collection.assert_not_called()
+
+    def test_initialize_collection_incompatible_dimension_raises(self):
+        mock_client = MagicMock()
+        mock_client.collection_exists.return_value = True
+
+        mock_info = MagicMock()
+        mock_info.config.params.vectors = rest_models.VectorParams(
+            size=768,  # Mismatch
+            distance=rest_models.Distance.COSINE,
+        )
+        mock_client.get_collection.return_value = mock_info
+
+        repo = QdrantVectorRepository(client=mock_client, config=VectorStoreConfig(dimension=384))
+        with pytest.raises(VectorStoreError, match="incompatible dimension"):
+            repo.initialize_collection(collection_name="test_col")
+
+    def test_upsert_points_batching(self):
+        mock_client = MagicMock()
+        repo = QdrantVectorRepository(client=mock_client, config=VectorStoreConfig(batch_size=2))
+
+        points = [
+            VectorPoint(id="p1", vector=[0.1, 0.2], payload={"text": "t1"}),
+            VectorPoint(id="p2", vector=[0.3, 0.4], payload={"text": "t2"}),
+            VectorPoint(id="p3", vector=[0.5, 0.6], payload={"text": "t3"}),
+        ]
+
+        upserted = repo.upsert_points(points, collection_name="test_col")
+        assert upserted == 3
+        # 3 points with batch_size=2 should call upsert twice
+        assert mock_client.upsert.call_count == 2
+
+    def test_delete_by_document_tenant_filter(self):
+        mock_client = MagicMock()
+        repo = QdrantVectorRepository(client=mock_client)
+
+        repo.delete_by_document(document_id="doc-123", user_id="user-456", collection_name="test_col")
+        mock_client.delete.assert_called_once()
+        call_kwargs = mock_client.delete.call_args[1]
+        assert call_kwargs["collection_name"] == "test_col"
+        filter_obj: rest_models.Filter = call_kwargs["points_selector"]
+        assert len(filter_obj.must) == 2
+
+
+class TestVectorStoreServiceUnit:
+    """Unit tests for VectorStoreService orchestration."""
+
+    def test_index_document_empty_chunks(self):
+        mock_repo = MagicMock()
+        mock_db = MagicMock()
+        service = VectorStoreService(
+            vector_repo=mock_repo,
+            embedding_service=EmbeddingService(provider=MockEmbeddingProvider()),
+        )
+
+        doc = Document(id="doc-1", user_id="user-1", filename="empty.txt", file_type=".txt", file_size_bytes=0, storage_path="")
+        
+        with patch("backend.app.vectorstore.service.DocumentChunkRepository") as mock_chunk_repo_cls:
+            mock_chunk_repo = MagicMock()
+            mock_chunk_repo.get_by_document.return_value = []
+            mock_chunk_repo_cls.return_value = mock_chunk_repo
+
+            result = service.index_document(document=doc, db=mock_db)
+
+            assert result.indexed_chunks_count == 0
+            assert result.point_ids == []
+            mock_repo.delete_by_document.assert_called_once_with(
+                document_id="doc-1", user_id="user-1", collection_name=service.config.collection_name
+            )
+
+    def test_index_document_success_syncs_mysql(self):
+        mock_repo = MagicMock()
+        mock_repo.upsert_points.return_value = 2
+        mock_db = MagicMock()
+
+        service = VectorStoreService(
+            vector_repo=mock_repo,
+            embedding_service=EmbeddingService(provider=MockEmbeddingProvider()),
+        )
+
+        doc = Document(id="doc-1", user_id="user-1", filename="sample.pdf", file_type=".pdf", file_size_bytes=100, storage_path="")
+        chunks = [
+            DocumentChunk(id="c1-uuid", document_id="doc-1", user_id="user-1", chunk_index=0, chunk_text="Chunk 0", token_count=2),
+            DocumentChunk(id="c2-uuid", document_id="doc-1", user_id="user-1", chunk_index=1, chunk_text="Chunk 1", token_count=2),
+        ]
+
+        with patch("backend.app.vectorstore.service.DocumentChunkRepository") as mock_chunk_repo_cls:
+            mock_chunk_repo = MagicMock()
+            mock_chunk_repo.get_by_document.return_value = chunks
+            mock_chunk_repo_cls.return_value = mock_chunk_repo
+
+            result = service.index_document(document=doc, db=mock_db)
+
+            assert result.indexed_chunks_count == 2
+            assert result.point_ids == ["c1-uuid", "c2-uuid"]
+            assert chunks[0].qdrant_point_id == "c1-uuid"
+            assert chunks[1].qdrant_point_id == "c2-uuid"
+            mock_db.commit.assert_called_once()

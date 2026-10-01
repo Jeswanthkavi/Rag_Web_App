@@ -10,6 +10,7 @@ from backend.app.core.config import get_settings
 from backend.app.models.user import User
 from backend.app.models.document import Document, DocumentStatus
 from backend.app.repositories.document_repository import DocumentRepository
+from backend.app.vectorstore.service import VectorStoreService
 from backend.app.utils.file_validation import (
     sanitize_filename,
     validate_file_extension,
@@ -24,8 +25,13 @@ settings = get_settings()
 class DocumentService:
     """Service encapsulating secure multi-tenant document management workflows."""
 
-    def __init__(self, doc_repo: DocumentRepository):
+    def __init__(
+        self,
+        doc_repo: DocumentRepository,
+        vector_service: Optional[VectorStoreService] = None,
+    ):
         self.doc_repo = doc_repo
+        self.vector_service = vector_service or VectorStoreService()
 
     async def upload_document(self, user: User, file: UploadFile) -> Document:
         """Processes, validates, stores, and catalogs a new document for the authenticated user."""
@@ -137,13 +143,23 @@ class DocumentService:
         return doc
 
     def delete_document(self, user: User, document_id: str) -> None:
-        """Deletes a document and purges its physical storage directory."""
+        """Deletes a document, purges Qdrant vectors, and removes physical storage directory."""
         doc = self.get_document(user=user, document_id=document_id)
         
-        # 1. Remove database record
+        # 1. Clean up Qdrant vector store points
+        try:
+            self.vector_service.delete_document_vectors(document_id=doc.id, user_id=user.id)
+        except Exception as e:
+            # Non-blocking log to ensure DB record deletion still proceeds
+            import logging
+            logging.getLogger("app.documents").warning(
+                f"Vector cleanup warning during document deletion for {doc.id}: {e}"
+            )
+
+        # 2. Remove database record (cascades to MySQL document_chunks)
         self.doc_repo.delete(doc)
         
-        # 2. Clean up filesystem storage directory safely
+        # 3. Clean up filesystem storage directory safely
         storage_path = Path(doc.storage_path)
         doc_dir = storage_path.parent
         if doc_dir.exists() and str(user.id) in str(doc_dir):

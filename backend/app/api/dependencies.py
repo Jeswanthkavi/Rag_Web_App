@@ -16,6 +16,7 @@ from backend.app.services.auth_service import AuthService
 from backend.app.services.document_service import DocumentService
 from backend.app.chunking.service import ChunkingService
 from backend.app.embeddings.service import EmbeddingService
+from backend.app.vectorstore.service import VectorStoreService
 
 settings = get_settings()
 
@@ -50,6 +51,13 @@ def get_embedding_service() -> EmbeddingService:
     return EmbeddingService()
 
 
+def get_vector_store_service(
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+) -> VectorStoreService:
+    """Dependency for providing an instance of VectorStoreService."""
+    return VectorStoreService(embedding_service=embedding_service)
+
+
 def get_auth_service(
     user_repo: UserRepository = Depends(get_user_repository),
 ) -> AuthService:
@@ -59,9 +67,10 @@ def get_auth_service(
 
 def get_document_service(
     doc_repo: DocumentRepository = Depends(get_document_repository),
+    vector_service: VectorStoreService = Depends(get_vector_store_service),
 ) -> DocumentService:
     """Dependency for providing an instance of DocumentService."""
-    return DocumentService(doc_repo)
+    return DocumentService(doc_repo=doc_repo, vector_service=vector_service)
 
 
 def get_current_user(

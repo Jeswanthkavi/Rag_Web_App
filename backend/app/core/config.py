@@ -80,6 +80,8 @@ class QdrantSettings(BaseModel):
     qdrant_api_key: Optional[SecretStr] = Field(default=None, description="Optional Qdrant Cloud / API Key")
     qdrant_collection_name: str = Field(default="rag_document_chunks", description="Target vector collection name")
     qdrant_timeout: float = Field(default=10.0, gt=0, description="Qdrant client timeout in seconds")
+    qdrant_batch_size: int = Field(default=64, ge=1, le=500, description="Batch size for Qdrant upserts")
+    prefer_grpc: bool = Field(default=False, description="Prefer gRPC over HTTP")
 
     @field_validator("qdrant_url")
     @classmethod
@@ -226,6 +228,8 @@ class Settings(BaseSettings):
     qdrant_api_key: Optional[SecretStr] = None
     qdrant_collection_name: str = "rag_document_chunks"
     qdrant_timeout: float = 10.0
+    qdrant_batch_size: int = 64
+    prefer_grpc: bool = False
 
     # Gemini
     gemini_api_key: SecretStr = SecretStr("")
@@ -325,6 +329,8 @@ class Settings(BaseSettings):
             qdrant_api_key=self.qdrant_api_key,
             qdrant_collection_name=self.qdrant_collection_name,
             qdrant_timeout=self.qdrant_timeout,
+            qdrant_batch_size=self.qdrant_batch_size,
+            prefer_grpc=self.prefer_grpc,
         )
 
     @property
@@ -421,6 +427,8 @@ class Settings(BaseSettings):
                 "url": self.qdrant_url,
                 "collection_name": self.qdrant_collection_name,
                 "api_key_configured": bool(self.qdrant_api_key and self.qdrant_api_key.get_secret_value()),
+                "batch_size": self.qdrant_batch_size,
+                "prefer_grpc": self.prefer_grpc,
             },
             "gemini": {
                 "model": self.gemini_model,
