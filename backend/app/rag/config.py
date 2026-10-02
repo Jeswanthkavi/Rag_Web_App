@@ -24,6 +24,7 @@ class RAGConfig:
     enable_citations: bool = True
     enable_query_rewriting: bool = True
     enable_reranking: bool = True
+    enable_hybrid_retrieval: bool = True
     no_context_message: str = DEFAULT_NO_CONTEXT_MESSAGE
 
     def __post_init__(self):
@@ -64,6 +65,7 @@ class RAGConfig:
         max_history_messages: Optional[int] = None,
         enable_query_rewriting: Optional[bool] = None,
         enable_reranking: Optional[bool] = None,
+        enable_hybrid_retrieval: Optional[bool] = None,
     ) -> "RAGConfig":
         """Builds RAGConfig from application Pydantic settings with optional overrides."""
         s = settings or get_settings()
@@ -99,6 +101,11 @@ class RAGConfig:
             if enable_reranking is not None
             else s.retrieval.enable_reranking
         )
+        hybrid = (
+            enable_hybrid_retrieval
+            if enable_hybrid_retrieval is not None
+            else s.hybrid_retrieval.enable_hybrid_retrieval
+        )
 
         return cls(
             top_k=fin_k,
@@ -110,4 +117,5 @@ class RAGConfig:
             max_history_messages=history,
             enable_query_rewriting=rewriting,
             enable_reranking=rerank,
+            enable_hybrid_retrieval=hybrid,
         )

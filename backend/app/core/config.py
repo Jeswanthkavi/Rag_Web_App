@@ -166,6 +166,17 @@ class QueryRewritingSettings(BaseModel):
     query_rewriter_timeout: float = Field(default=10.0, gt=0, description="Query rewriting request timeout in seconds")
 
 
+class HybridRetrievalSettings(BaseModel):
+    """Hybrid retrieval (Dense + BM25/Lexical + RRF) configuration."""
+    enable_hybrid_retrieval: bool = Field(default=True, description="Enable hybrid dense and lexical retrieval")
+    dense_top_k: int = Field(default=20, ge=1, le=100, description="Number of candidates retrieved from dense vector search")
+    lexical_top_k: int = Field(default=20, ge=1, le=100, description="Number of candidates retrieved from lexical search")
+    fusion_candidate_limit: int = Field(default=20, ge=1, le=100, description="Maximum fused candidates passed to reranker")
+    rrf_k: int = Field(default=60, ge=1, le=200, description="Reciprocal Rank Fusion smoothing constant")
+    bm25_k1: float = Field(default=1.5, ge=0.1, le=5.0, description="BM25 term frequency saturation parameter")
+    bm25_b: float = Field(default=0.75, ge=0.0, le=1.0, description="BM25 document length normalization parameter")
+
+
 class RetrievalSettings(BaseModel):
     """Text chunking and retrieval parameters."""
     chunk_size: int = Field(default=500, ge=50, le=4000, description="Character chunk target size")
@@ -279,6 +290,15 @@ class Settings(BaseSettings):
     enable_reranking: bool = True
     reranking_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranking_top_k: int = 5
+
+    # Hybrid Retrieval (Phase 17)
+    enable_hybrid_retrieval: bool = True
+    dense_top_k: int = 20
+    lexical_top_k: int = 20
+    fusion_candidate_limit: int = 20
+    rrf_k: int = 60
+    bm25_k1: float = 1.5
+    bm25_b: float = 0.75
 
     # Query Rewriting
     enable_query_rewriting: bool = True
@@ -409,6 +429,18 @@ class Settings(BaseSettings):
         )
 
     @property
+    def hybrid_retrieval(self) -> HybridRetrievalSettings:
+        return HybridRetrievalSettings(
+            enable_hybrid_retrieval=self.enable_hybrid_retrieval,
+            dense_top_k=self.dense_top_k,
+            lexical_top_k=self.lexical_top_k,
+            fusion_candidate_limit=self.fusion_candidate_limit,
+            rrf_k=self.rrf_k,
+            bm25_k1=self.bm25_k1,
+            bm25_b=self.bm25_b,
+        )
+
+    @property
     def query_rewriting(self) -> QueryRewritingSettings:
         return QueryRewritingSettings(
             enable_query_rewriting=self.enable_query_rewriting,
@@ -503,6 +535,13 @@ class Settings(BaseSettings):
                 "enable_reranking": self.enable_reranking,
                 "reranking_model": self.reranking_model,
                 "reranking_top_k": self.reranking_top_k,
+            },
+            "hybrid_retrieval": {
+                "enabled": self.enable_hybrid_retrieval,
+                "dense_top_k": self.dense_top_k,
+                "lexical_top_k": self.lexical_top_k,
+                "fusion_candidate_limit": self.fusion_candidate_limit,
+                "rrf_k": self.rrf_k,
             },
             "query_rewriting": {
                 "enabled": self.enable_query_rewriting,

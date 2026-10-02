@@ -11,20 +11,24 @@ Document Upload → Validation & Virus/Format Check → Text Extraction (PDF/DOC
                 → Dense Embeddings (Local/Configurable) → Qdrant Vector Upsert 
                 → Relational Metadata Persistence → Status Update (COMPLETED)
 
-QUERY & GENERATION PIPELINE (Phase 15 & 16 Updated):
+QUERY & GENERATION PIPELINE (Phase 17 Updated):
 JWT Authentication → Conversation Validation → Bounded Conversation History
                    → Conversational Query Rewriting (if history present) [Phase 15]
-                   → Dense Semantic Retrieval in Qdrant (Candidate Pool: retrieval_top_k=20)
-                   → Cross-Encoder Reranking (Re-orders candidates -> final_top_k=5) [Phase 16]
+                   → Parallel Candidate Retrieval:
+                     ├─ Dense Semantic Retrieval in Qdrant (dense_top_k=20)
+                     └─ Lexical BM25 Retrieval in MySQL (lexical_top_k=20) [Phase 17]
+                   → Reciprocal Rank Fusion (RRF, k=60) & Deduplication [Phase 17]
+                   → Cross-Encoder Reranking (Re-orders fused candidates -> final_top_k=5) [Phase 16]
                    → Structured Context Construction ([Source 1], [Source 2])
                    → Grounded LLM Prompt Assembly (Answers ORIGINAL User Query)
-                   → Gemini LLM Generation → Citation Verification
-                   → User & Assistant Message Persistence → Structured RAGResponse
+                   → Gemini LLM Generation → Citation Verification [Phase 13]
+                   → User & Assistant Message Persistence → Structured RAGResponse [Phase 14]
 ```
 
 ---
 
 ## 2. Ingestion Pipeline Stages
+
 
 ### Stage 1: Document Upload & Validation
 - **File Types**: `.pdf`, `.docx`, `.txt`.
@@ -189,9 +193,62 @@ What about the battery?
 
 ---
 
-## 6. Strict Phase Boundaries
+## 6. Hybrid Retrieval & Candidate Fusion (Phase 17 Specification)
+
+### Objective
+Upgrades retrieval by combining dense semantic similarity (Qdrant) with exact keyword matching (BM25) to mitigate vocabulary mismatch and out-of-vocabulary terms.
+
+### Architecture & Pipeline
+1. **Parallel Execution**:
+   - Dense vector retrieval against Qdrant (`dense_top_k=20`, cosine distance).
+   - Lexical BM25 retrieval against MySQL document chunks (`lexical_top_k=20`, Okapi BM25).
+2. **Reciprocal Rank Fusion (RRF)**:
+   $$\text{RRF\_score}(d) = \sum_{m \in \{\text{dense}, \text{lexical}\}} \frac{1}{k + r_m(d)}$$
+   where $k = 60$ (`rrf_k`).
+3. **Deduplication & Provenance Preservation**:
+   - Overlapping chunks are deduplicated by `chunk_id`.
+   - Metadata preserves `dense_rank`, `lexical_rank`, `dense_score`, `lexical_score`, and `fusion_score`.
+4. **Tenant Isolation**:
+   - Both dense and lexical retrievers strictly filter by `user_id == authenticated_user.id` and optional `document_id`.
+5. **Safe Fallback**:
+   - If dense retrieval fails, lexical candidates are used.
+   - If lexical retrieval fails, dense candidates are used.
+   - If both fail, `HybridRetrievalError` is logged and mapped safely.
+6. **Reranker Integration**:
+   - The top fused candidates (`fusion_candidate_limit=20`) are forwarded directly to the Phase 16 Cross-Encoder reranker to select `final_top_k=5`.
+
+---
+
+## 7. Evaluation Framework (Phase 18 Specification)
+
+### Objective
+Provides a multi-dimensional benchmarking framework measuring retrieval quality, synthesis accuracy, citation integrity, and execution latencies.
+
+### Metrics Implemented
+- **Retrieval Quality**:
+  - **Precision@K**: Proportion of retrieved chunks in top-K that are relevant ($K \in \{1, 3, 5, 10\}$).
+  - **Recall@K**: Proportion of relevant ground-truth chunks retrieved in top-K.
+  - **MRR (Mean Reciprocal Rank)**: $1 / \text{rank of first relevant chunk}$.
+  - **Context Relevance**: Proportion of retrieved context relevant to the query.
+- **Generation Quality**:
+  - **Answer Relevance**: Semantic/token overlap with ground-truth answer.
+  - **Faithfulness / Groundedness**: Proportion of generated answer tokens supported by context.
+- **Citation Quality**:
+  - **Valid Citation Rate**: Proportion of citations mapped to valid context chunks.
+  - **Citation Precision & Coverage**: Precision against expected source documents.
+- **Latency Telemetry**:
+  - Monotonic measurement of retrieval, reranking, generation, and total RAG durations (mean, median, p95, min, max).
+
+---
+
+## 8. Strict Phase Boundaries
 
 - **Phase 15 (Implemented)**: Conversational Query Rewriting with Gemini & Fake providers, prompt injection guards, and fallback.
 - **Phase 16 (Implemented)**: Cross-Encoder Candidate Reranking with Local & Fake providers, dense/rerank score preservation, and fallback.
-- **Phase 17 (NOT Implemented)**: Hybrid Retrieval (Dense + BM25/Sparse), Reciprocal Rank Fusion (RRF), and Score Fusion belong strictly to Phase 17.
-- **Phase 18 (NOT Implemented)**: Precision@K, Recall@K, MRR, and full automated evaluation framework belong strictly to Phase 18.
+- **Phase 17 (Implemented)**: Hybrid Retrieval (Dense Qdrant + Lexical BM25), Reciprocal Rank Fusion (RRF), and score preservation.
+- **Phase 18 (Implemented)**: Evaluation Framework (Precision@K, Recall@K, MRR, Context Relevance, Answer Relevance, Faithfulness, Citation Correctness, Latency).
+- **Phase 19 (NOT Implemented)**: Frontend (React/Next.js/Vite) belongs strictly to Round 4.
+- **Phase 20 (NOT Implemented)**: Security hardening beyond this round belongs strictly to Round 4.
+- **Phase 21 (NOT Implemented)**: Performance optimization belongs strictly to Round 4.
+- **Phase 22 (NOT Implemented)**: Production deployment belongs strictly to Round 4.
+

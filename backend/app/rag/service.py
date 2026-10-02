@@ -6,6 +6,8 @@ from typing import List, Optional
 
 from backend.app.citations.models import Citation
 from backend.app.citations.parser import CitationParser
+from backend.app.hybrid_retrieval.base import HybridRetrievalError
+from backend.app.hybrid_retrieval.service import HybridRetrievalService
 from backend.app.llm.base import BaseLLMProvider, LLMProviderError
 from backend.app.llm.gemini import GeminiProvider
 from backend.app.query_rewriting.service import QueryRewritingService
@@ -30,7 +32,7 @@ logger = logging.getLogger("app.rag.service")
 
 
 class RAGService:
-    """Production RAG service coordinating query rewriting, retrieval, reranking, memory, citation validation, and LLM synthesis."""
+    """Production RAG service coordinating query rewriting, hybrid retrieval, reranking, memory, citations, and LLM synthesis."""
 
     def __init__(
         self,
@@ -43,6 +45,7 @@ class RAGService:
         conversation_service: Optional[ConversationService] = None,
         query_rewriting_service: Optional[QueryRewritingService] = None,
         reranking_service: Optional[RerankingService] = None,
+        hybrid_retrieval_service: Optional[HybridRetrievalService] = None,
     ):
         self.config = config or RAGConfig.from_settings()
         self.retrieval_service = retrieval_service or RetrievalService()
@@ -53,6 +56,10 @@ class RAGService:
         self.conversation_service = conversation_service
         self.query_rewriting_service = query_rewriting_service or QueryRewritingService()
         self.reranking_service = reranking_service or RerankingService()
+        self.hybrid_retrieval_service = hybrid_retrieval_service
+
+
+
 
     def validate_query(self, query: str) -> str:
         """Validates and trims user query string."""
@@ -132,28 +139,36 @@ class RAGService:
         )
         retrieval_query = rewritten_info.retrieval_query or sanitized_query
 
-        # 4. Dense Semantic Retrieval
-        # Candidate pool size: retrieval_top_k candidates (or scaled appropriately if top_k is provided)
+        # 4. Candidate Retrieval (Hybrid Dense + Lexical Fusion or Dense Only)
         dense_top_k = self.config.retrieval_top_k
         if top_k is not None:
             dense_top_k = max(dense_top_k, top_k * 4)
 
         try:
             start_retrieval = time.perf_counter()
-            retrieval_response = self.retrieval_service.search(
-                query=retrieval_query,
-                user_id=clean_user_id,
-                top_k=dense_top_k,
-                similarity_threshold=similarity_threshold if similarity_threshold is not None else self.config.similarity_threshold,
-                document_id=clean_doc_id,
-            )
+            if self.config.enable_hybrid_retrieval and self.hybrid_retrieval_service:
+                retrieval_response = self.hybrid_retrieval_service.search(
+                    query=retrieval_query,
+                    user_id=clean_user_id,
+                    top_k=dense_top_k,
+                    similarity_threshold=similarity_threshold if similarity_threshold is not None else self.config.similarity_threshold,
+                    document_id=clean_doc_id,
+                )
+            else:
+                retrieval_response = self.retrieval_service.search(
+                    query=retrieval_query,
+                    user_id=clean_user_id,
+                    top_k=dense_top_k,
+                    similarity_threshold=similarity_threshold if similarity_threshold is not None else self.config.similarity_threshold,
+                    document_id=clean_doc_id,
+                )
             retrieval_duration = time.perf_counter() - start_retrieval
             logger.info(
                 f"Retrieved {len(retrieval_response.results)} candidates in {retrieval_duration:.3f}s for user '{clean_user_id}' (query: '{retrieval_query[:40]}...')"
             )
-        except RetrievalValidationError as e:
+        except (RetrievalValidationError, RAGValidationError) as e:
             raise RAGValidationError(str(e)) from e
-        except (RetrievalError, Exception) as e:
+        except (RetrievalError, HybridRetrievalError, Exception) as e:
             sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
             logger.error(f"Retrieval step failed during RAG query: {sanitized}")
             raise RAGError(f"Retrieval failed: {sanitized}") from e

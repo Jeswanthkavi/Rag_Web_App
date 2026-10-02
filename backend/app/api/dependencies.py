@@ -77,6 +77,9 @@ def get_document_service(
     return DocumentService(doc_repo=doc_repo, vector_service=vector_service)
 
 
+from backend.app.hybrid_retrieval.base import BaseLexicalRetriever
+from backend.app.hybrid_retrieval.lexical_provider import SQLLexicalRetriever
+from backend.app.hybrid_retrieval.service import HybridRetrievalService
 from backend.app.query_rewriting.service import QueryRewritingService
 from backend.app.reranking.service import RerankingService
 from backend.app.services.conversation_service import ConversationService
@@ -97,11 +100,27 @@ def get_reranking_service() -> RerankingService:
     return RerankingService()
 
 
+def get_lexical_retriever(db: Session = Depends(get_db)) -> BaseLexicalRetriever:
+    """Dependency for providing an instance of SQLLexicalRetriever."""
+    return SQLLexicalRetriever(db=db)
+
+
 def get_retrieval_service(
     embedding_service: EmbeddingService = Depends(get_embedding_service),
 ) -> RetrievalService:
     """Dependency for providing an instance of RetrievalService."""
     return RetrievalService(embedding_service=embedding_service)
+
+
+def get_hybrid_retrieval_service(
+    retrieval_service: RetrievalService = Depends(get_retrieval_service),
+    lexical_retriever: BaseLexicalRetriever = Depends(get_lexical_retriever),
+) -> HybridRetrievalService:
+    """Dependency for providing an instance of HybridRetrievalService."""
+    return HybridRetrievalService(
+        retrieval_service=retrieval_service,
+        lexical_retriever=lexical_retriever,
+    )
 
 
 def get_llm_provider() -> BaseLLMProvider:
@@ -115,6 +134,7 @@ def get_rag_service(
     conversation_service: ConversationService = Depends(get_conversation_service),
     query_rewriting_service: QueryRewritingService = Depends(get_query_rewriting_service),
     reranking_service: RerankingService = Depends(get_reranking_service),
+    hybrid_retrieval_service: HybridRetrievalService = Depends(get_hybrid_retrieval_service),
 ) -> RAGService:
     """Dependency for providing an instance of RAGService."""
     return RAGService(
@@ -123,6 +143,7 @@ def get_rag_service(
         conversation_service=conversation_service,
         query_rewriting_service=query_rewriting_service,
         reranking_service=reranking_service,
+        hybrid_retrieval_service=hybrid_retrieval_service,
     )
 
 
