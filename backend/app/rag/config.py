@@ -84,8 +84,8 @@ class RAGConfig:
             if similarity_threshold is not None
             else s.retrieval.score_threshold
         )
-        temp = temperature if temperature is not None else s.gemini.gemini_temperature
-        tokens = max_tokens if max_tokens is not None else s.gemini.gemini_max_tokens
+        temp = temperature if temperature is not None else s.openrouter.openrouter_temperature
+        tokens = max_tokens if max_tokens is not None else s.openrouter.openrouter_max_tokens
         history = (
             max_history_messages
             if max_history_messages is not None

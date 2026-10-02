@@ -9,7 +9,7 @@ from backend.app.core.config import Settings, get_settings
 class QueryRewritingConfig:
     """Runtime configuration parameters for conversational query rewriting."""
     enabled: bool = True
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     temperature: float = 0.0
     max_history_messages: int = 5
     max_query_length: int = 500

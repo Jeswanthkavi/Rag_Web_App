@@ -34,10 +34,16 @@ def test_engine() -> Generator[Engine, None, None]:
     alembic_cfg = Config("alembic.ini")
     alembic_cfg.set_main_option("sqlalchemy.url", test_db_url)
     
-    try:
-        command.downgrade(alembic_cfg, "base")
-    except Exception:
-        Base.metadata.drop_all(bind=engine)
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+        # Drop all known tables plus alembic_version
+        result = conn.execute(text("SHOW TABLES;"))
+        tables = [row[0] for row in result]
+        for tbl in tables:
+            conn.execute(text(f"DROP TABLE IF EXISTS `{tbl}`;"))
+        conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+        conn.commit()
         
     command.upgrade(alembic_cfg, "head")
     
@@ -47,7 +53,13 @@ def test_engine() -> Generator[Engine, None, None]:
     try:
         command.downgrade(alembic_cfg, "base")
     except Exception:
-        Base.metadata.drop_all(bind=engine)
+        with engine.connect() as conn:
+            conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(text(f"DROP TABLE IF EXISTS {table.name};"))
+            conn.execute(text("DROP TABLE IF EXISTS alembic_version;"))
+            conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+            conn.commit()
     engine.dispose()
 
 

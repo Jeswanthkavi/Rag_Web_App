@@ -13,14 +13,14 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
+/build/
 develop-eggs/
-dist/
+/dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -39,10 +39,10 @@ htmlcov/
 coverage.xml
 *.cover
 
-# Data, Storage & Logs
-storage/
-uploads/
-logs/
+# Data, Storage & Logs (Anchored to root)
+/storage/
+/uploads/
+/logs/
 *.log
 scratch/
 

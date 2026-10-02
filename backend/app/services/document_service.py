@@ -11,6 +11,7 @@ from backend.app.models.user import User
 from backend.app.models.document import Document, DocumentStatus
 from backend.app.repositories.document_repository import DocumentRepository
 from backend.app.vectorstore.service import VectorStoreService
+from backend.app.storage import BaseStorageProvider, get_storage_provider
 from backend.app.utils.file_validation import (
     sanitize_filename,
     validate_file_extension,
@@ -29,9 +30,11 @@ class DocumentService:
         self,
         doc_repo: DocumentRepository,
         vector_service: Optional[VectorStoreService] = None,
+        storage_provider: Optional[BaseStorageProvider] = None,
     ):
         self.doc_repo = doc_repo
         self.vector_service = vector_service or VectorStoreService()
+        self.storage_provider = storage_provider or get_storage_provider()
 
     async def upload_document(self, user: User, file: UploadFile) -> Document:
         """Processes, validates, stores, and catalogs a new document for the authenticated user."""
@@ -163,8 +166,5 @@ class DocumentService:
         from backend.app.hybrid_retrieval.cache import get_bm25_cache
         get_bm25_cache().invalidate_user(user_id=str(user.id))
         
-        # 3. Clean up filesystem storage directory safely
-        storage_path = Path(doc.storage_path)
-        doc_dir = storage_path.parent
-        if doc_dir.exists() and str(user.id) in str(doc_dir):
-            shutil.rmtree(doc_dir, ignore_errors=True)
+        # 3. Clean up storage files safely
+        self.storage_provider.delete(doc.storage_path, str(user.id))

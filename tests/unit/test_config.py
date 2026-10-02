@@ -7,6 +7,7 @@ from backend.app.core.config import (
     AppSettings,
     DatabaseSettings,
     QdrantSettings,
+    OpenRouterSettings,
     GeminiSettings,
     AuthSettings,
     StorageSettings,
@@ -33,12 +34,16 @@ class TestConfigDefaults:
         assert settings.enable_reranking is True
         assert settings.enable_query_rewriting is True
         assert settings.score_threshold == 0.5
+        assert settings.openrouter_model == "nvidia/nemotron-3-ultra-550b-a55b:free"
+        assert settings.openrouter_temperature == 0.2
+        assert settings.openrouter_max_tokens == 2048
 
     def test_modular_subsection_properties(self):
         settings = Settings()
         assert isinstance(settings.app, AppSettings)
         assert isinstance(settings.database, DatabaseSettings)
         assert isinstance(settings.qdrant, QdrantSettings)
+        assert isinstance(settings.openrouter, OpenRouterSettings)
         assert isinstance(settings.gemini, GeminiSettings)
         assert isinstance(settings.auth, AuthSettings)
         assert isinstance(settings.storage, StorageSettings)
@@ -101,17 +106,17 @@ class TestSecretMaskingAndSecurity:
 
     def test_secret_str_masking(self):
         settings = Settings(
-            gemini_api_key=SecretStr("super-secret-key-12345"),
+            openrouter_api_key=SecretStr("super-secret-openrouter-key-12345"),
             secret_key=SecretStr("app-secret-67890"),
         )
-        assert "super-secret-key-12345" not in str(settings.gemini_api_key)
-        assert "super-secret-key-12345" not in repr(settings.gemini_api_key)
-        assert settings.gemini_api_key.get_secret_value() == "super-secret-key-12345"
+        assert "super-secret-openrouter-key-12345" not in str(settings.openrouter_api_key)
+        assert "super-secret-openrouter-key-12345" not in repr(settings.openrouter_api_key)
+        assert settings.openrouter_api_key.get_secret_value() == "super-secret-openrouter-key-12345"
 
     def test_safe_summary_masks_credentials(self):
         settings = Settings(
             database_url="mysql+pymysql://admin:secretpassword123@localhost:3306/advanced_rag",
-            gemini_api_key=SecretStr("my-gemini-key"),
+            openrouter_api_key=SecretStr("my-openrouter-key"),
         )
         summary = settings.safe_summary()
         
@@ -120,8 +125,8 @@ class TestSecretMaskingAndSecurity:
         assert "admin:***@localhost:3306/advanced_rag" in summary["database"]["database_url"]
         
         # Verify API key is represented only as boolean status
-        assert "my-gemini-key" not in str(summary)
-        assert summary["gemini"]["api_key_configured"] is True
+        assert "my-openrouter-key" not in str(summary)
+        assert summary["openrouter"]["api_key_configured"] is True
 
 
 class TestStartupValidation:
@@ -131,19 +136,19 @@ class TestStartupValidation:
         valid_settings = Settings(
             database_url="mysql+pymysql://root:@localhost:3306/advanced_rag",
             qdrant_url="http://localhost:6333",
-            gemini_api_key=SecretStr("valid-key-value"),
+            openrouter_api_key=SecretStr("valid-openrouter-key-value"),
         )
         assert validate_startup_config(valid_settings) is True
 
-    def test_startup_validation_fails_on_empty_gemini_key(self):
+    def test_startup_validation_fails_on_empty_openrouter_key(self):
         invalid_settings = Settings(
             database_url="mysql+pymysql://root:@localhost:3306/advanced_rag",
             qdrant_url="http://localhost:6333",
-            gemini_api_key=SecretStr(""),
+            openrouter_api_key=SecretStr(""),
         )
         with pytest.raises(ValueError) as exc:
             validate_startup_config(invalid_settings)
-        assert "GEMINI_API_KEY is required" in str(exc.value)
+        assert "OPENROUTER_API_KEY is required" in str(exc.value)
 
 
 class TestEnvironmentVariableLoading:
@@ -162,3 +167,47 @@ class TestEnvironmentVariableLoading:
         assert settings.chunk_size == 800
         assert settings.chunk_overlap == 100
         assert settings.debug is False
+
+    def test_frontend_url_merged_into_allowed_origins(self):
+        settings = Settings(frontend_url="https://rag-app.vercel.app")
+        assert "https://rag-app.vercel.app" in settings.allowed_origins
+        assert "https://rag-app.vercel.app" in settings.app.allowed_origins
+
+    def test_production_fails_fast_on_default_jwt_secret(self):
+        prod_settings = Settings(
+            app_env="production",
+            database_url="mysql+pymysql://root:@localhost:3306/advanced_rag",
+            qdrant_url="http://localhost:6333",
+            openrouter_api_key=SecretStr("real-openrouter-key"),
+            jwt_secret_key=SecretStr("default-jwt-secret-key-change-in-prod-87654321"),
+        )
+        with pytest.raises(ValueError) as exc:
+            validate_startup_config(prod_settings)
+        assert "JWT_SECRET_KEY must be explicitly configured" in str(exc.value)
+
+    def test_production_fails_fast_on_wildcard_cors(self):
+        prod_settings = Settings(
+            app_env="production",
+            database_url="mysql+pymysql://root:@localhost:3306/advanced_rag",
+            qdrant_url="http://localhost:6333",
+            openrouter_api_key=SecretStr("real-openrouter-key"),
+            jwt_secret_key=SecretStr("super-strong-random-prod-jwt-secret-xyz-12345"),
+            secret_key=SecretStr("super-strong-random-prod-app-secret-abc-67890"),
+            allowed_origins=["*"],
+        )
+        with pytest.raises(ValueError) as exc:
+            validate_startup_config(prod_settings)
+        assert "Wildcard '*' is forbidden in ALLOWED_ORIGINS" in str(exc.value)
+
+    def test_production_passes_with_valid_config(self):
+        prod_settings = Settings(
+            app_env="production",
+            database_url="mysql+pymysql://root:@localhost:3306/advanced_rag",
+            qdrant_url="http://localhost:6333",
+            openrouter_api_key=SecretStr("real-openrouter-key"),
+            jwt_secret_key=SecretStr("super-strong-random-prod-jwt-secret-xyz-12345"),
+            secret_key=SecretStr("super-strong-random-prod-app-secret-abc-67890"),
+            allowed_origins=["https://rag-app.vercel.app"],
+        )
+        assert validate_startup_config(prod_settings) is True
+

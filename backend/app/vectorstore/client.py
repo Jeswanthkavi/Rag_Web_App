@@ -19,10 +19,13 @@ def create_qdrant_client(config: Optional[VectorStoreConfig] = None) -> QdrantCl
     with _CLIENT_LOCK:
         if key not in _CLIENT_CACHE:
             logger.debug(f"Initializing Qdrant client connection for URL: {cfg.url}")
-            _CLIENT_CACHE[key] = QdrantClient(
-                url=cfg.url,
-                api_key=cfg.api_key,
-                timeout=cfg.timeout,
-                prefer_grpc=cfg.prefer_grpc,
-            )
+            if cfg.url == ":memory:":
+                _CLIENT_CACHE[key] = QdrantClient(location=":memory:")
+            else:
+                _CLIENT_CACHE[key] = QdrantClient(
+                    url=cfg.url,
+                    api_key=cfg.api_key,
+                    timeout=cfg.timeout,
+                    prefer_grpc=cfg.prefer_grpc,
+                )
         return _CLIENT_CACHE[key]

@@ -22,7 +22,7 @@ router = APIRouter()
     response_model=RAGResponse,
     status_code=status.HTTP_200_OK,
     summary="Execute grounded RAG answer generation",
-    description="Retrieves relevant tenant document chunks via Phase 11 semantic search, builds a grounded prompt, and synthesizes a factual answer using Google Gemini.",
+    description="Retrieves relevant tenant document chunks via semantic search, builds a grounded prompt, and synthesizes a factual answer using OpenRouter / NVIDIA Nemotron.",
 )
 def rag_query(
     request: RAGQuery,

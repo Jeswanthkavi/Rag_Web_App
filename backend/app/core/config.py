@@ -30,6 +30,10 @@ class AppSettings(BaseModel):
         default=SecretStr("default-dev-secret-key-change-in-prod-12345678"),
         description="Application secret key for internal crypto operations"
     )
+    frontend_url: Optional[str] = Field(
+        default=None,
+        description="Configurable production frontend origin (e.g. https://your-app.vercel.app)"
+    )
     allowed_origins: List[str] = Field(
         default=["http://localhost:3000", "http://127.0.0.1:3000"],
         description="Allowed CORS origins"
@@ -92,6 +96,27 @@ class QdrantSettings(BaseModel):
         if not parsed.scheme or not parsed.netloc:
             raise ValueError(f"Invalid QDRANT_URL: {v}")
         return v.strip().rstrip("/")
+
+
+class OpenRouterSettings(BaseModel):
+    """OpenRouter / NVIDIA Nemotron LLM configuration."""
+    openrouter_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="OpenRouter API Key"
+    )
+    openrouter_model: str = Field(
+        default="nvidia/nemotron-3-ultra-550b-a55b:free",
+        description="OpenRouter model identifier"
+    )
+    openrouter_base_url: str = Field(
+        default="https://openrouter.ai/api/v1",
+        description="OpenRouter API base URL"
+    )
+    openrouter_temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
+    openrouter_max_tokens: int = Field(default=2048, ge=64, le=8192, description="Maximum completion tokens")
+    openrouter_timeout: float = Field(default=30.0, gt=0, description="OpenRouter API request timeout in seconds")
+    openrouter_app_name: str = Field(default="Advanced-RAG-Platform", description="Application display name for OpenRouter header")
+    openrouter_http_referer: str = Field(default="http://localhost:8000", description="Application HTTP referer for OpenRouter header")
 
 
 class GeminiSettings(BaseModel):
@@ -159,7 +184,7 @@ class EmbeddingSettings(BaseModel):
 class QueryRewritingSettings(BaseModel):
     """Conversational query rewriting configuration."""
     enable_query_rewriting: bool = Field(default=True, description="Enable query rewriting for conversational follow-ups")
-    query_rewriter_model: str = Field(default="gemini-3.8-flash", description="Model name for query rewriting")
+    query_rewriter_model: str = Field(default="nvidia/nemotron-3-ultra-550b-a55b:free", description="Model name for query rewriting")
     query_rewriter_temperature: float = Field(default=0.0, ge=0.0, le=1.0, description="Temperature for query rewriting")
     query_rewriter_max_history_messages: int = Field(default=5, ge=1, le=20, description="Max history messages for rewriting prompt")
     query_rewriter_max_query_length: int = Field(default=500, ge=50, le=2000, description="Max length of rewritten query")
@@ -252,6 +277,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     secret_key: SecretStr = SecretStr("default-dev-secret-key-change-in-prod-12345678")
+    frontend_url: Optional[str] = None
     allowed_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # Database
@@ -270,7 +296,17 @@ class Settings(BaseSettings):
     qdrant_batch_size: int = 64
     prefer_grpc: bool = False
 
-    # Gemini
+    # OpenRouter (Primary LLM)
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_temperature: float = 0.2
+    openrouter_max_tokens: int = 2048
+    openrouter_timeout: float = 30.0
+    openrouter_app_name: str = "Advanced-RAG-Platform"
+    openrouter_http_referer: str = "http://localhost:8000"
+
+    # Gemini (Secondary / Optional Legacy)
     gemini_api_key: SecretStr = SecretStr("")
     gemini_model: str = "gemini-3.8-flash"
     gemini_temperature: float = 0.2
@@ -315,7 +351,7 @@ class Settings(BaseSettings):
 
     # Query Rewriting
     enable_query_rewriting: bool = True
-    query_rewriter_model: str = "gemini-2.5-flash"
+    query_rewriter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     query_rewriter_temperature: float = 0.0
     query_rewriter_max_history_messages: int = 5
     query_rewriter_max_query_length: int = 500
@@ -365,6 +401,10 @@ class Settings(BaseSettings):
             raise ValueError("chunk_overlap must be strictly less than chunk_size")
         if self.reranking_top_k > self.retrieval_top_k:
             raise ValueError("reranking_top_k cannot exceed retrieval_top_k")
+        if self.frontend_url and self.frontend_url.strip():
+            url = self.frontend_url.strip()
+            if url not in self.allowed_origins:
+                self.allowed_origins.append(url)
         return self
 
     # Sub-section property accessors for modular service dependency injection
@@ -378,6 +418,7 @@ class Settings(BaseSettings):
             host=self.host,
             port=self.port,
             secret_key=self.secret_key,
+            frontend_url=self.frontend_url,
             allowed_origins=self.allowed_origins,
         )
 
@@ -401,6 +442,19 @@ class Settings(BaseSettings):
             qdrant_timeout=self.qdrant_timeout,
             qdrant_batch_size=self.qdrant_batch_size,
             prefer_grpc=self.prefer_grpc,
+        )
+
+    @property
+    def openrouter(self) -> OpenRouterSettings:
+        return OpenRouterSettings(
+            openrouter_api_key=self.openrouter_api_key,
+            openrouter_model=self.openrouter_model,
+            openrouter_base_url=self.openrouter_base_url,
+            openrouter_temperature=self.openrouter_temperature,
+            openrouter_max_tokens=self.openrouter_max_tokens,
+            openrouter_timeout=self.openrouter_timeout,
+            openrouter_app_name=self.openrouter_app_name,
+            openrouter_http_referer=self.openrouter_http_referer,
         )
 
     @property
@@ -542,6 +596,13 @@ class Settings(BaseSettings):
                 "batch_size": self.qdrant_batch_size,
                 "prefer_grpc": self.prefer_grpc,
             },
+            "openrouter": {
+                "model": self.openrouter_model,
+                "base_url": self.openrouter_base_url,
+                "temperature": self.openrouter_temperature,
+                "max_tokens": self.openrouter_max_tokens,
+                "api_key_configured": bool(self.openrouter_api_key and self.openrouter_api_key.get_secret_value()),
+            },
             "gemini": {
                 "model": self.gemini_model,
                 "temperature": self.gemini_temperature,
@@ -623,13 +684,22 @@ def validate_startup_config(settings: Settings) -> bool:
     if not settings.qdrant_url:
         errors.append("QDRANT_URL is required and cannot be empty")
         
-    # Check Gemini API Key
-    if not settings.gemini_api_key.get_secret_value():
-        errors.append("GEMINI_API_KEY is required and cannot be empty")
+    # Check OpenRouter API Key
+    if not settings.openrouter_api_key.get_secret_value():
+        errors.append("OPENROUTER_API_KEY is required and cannot be empty")
         
     # Check Chunk parameters
     if settings.chunk_overlap >= settings.chunk_size:
         errors.append("CHUNK_OVERLAP must be strictly less than CHUNK_SIZE")
+
+    # Production-specific safety hardening
+    if settings.app_env.lower() in ("production", "prod"):
+        if settings.jwt_secret_key.get_secret_value() == "default-jwt-secret-key-change-in-prod-87654321":
+            errors.append("JWT_SECRET_KEY must be explicitly configured with a secure random secret in production")
+        if settings.secret_key.get_secret_value() == "default-dev-secret-key-change-in-prod-12345678":
+            errors.append("SECRET_KEY must be explicitly configured with a secure random secret in production")
+        if "*" in settings.allowed_origins:
+            errors.append("Wildcard '*' is forbidden in ALLOWED_ORIGINS when running in production")
         
     if errors:
         raise ValueError(f"Startup configuration validation failed: {'; '.join(errors)}")

@@ -9,7 +9,7 @@ from backend.app.query_rewriting.base import (
     RewrittenQuery,
 )
 from backend.app.query_rewriting.config import QueryRewritingConfig
-from backend.app.query_rewriting.gemini_rewriter import GeminiQueryRewriter
+from backend.app.query_rewriting.openrouter_rewriter import OpenRouterQueryRewriter
 
 logger = logging.getLogger("app.query_rewriting.service")
 
@@ -23,7 +23,7 @@ class QueryRewritingService:
         config: Optional[QueryRewritingConfig] = None,
     ):
         self.config = config or QueryRewritingConfig.from_settings()
-        self.rewriter = rewriter or GeminiQueryRewriter(config=self.config)
+        self.rewriter = rewriter or OpenRouterQueryRewriter(config=self.config)
 
     def rewrite_query(
         self,

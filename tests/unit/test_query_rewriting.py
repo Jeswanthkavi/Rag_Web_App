@@ -28,6 +28,7 @@ from backend.app.query_rewriting.base import (
 )
 from backend.app.query_rewriting.config import QueryRewritingConfig
 from backend.app.query_rewriting.fake_rewriter import FakeQueryRewriter
+from backend.app.query_rewriting.openrouter_rewriter import OpenRouterQueryRewriter
 from backend.app.query_rewriting.gemini_rewriter import GeminiQueryRewriter
 from backend.app.query_rewriting.prompts import (
     QUERY_REWRITING_SYSTEM_INSTRUCTION,
@@ -42,7 +43,7 @@ class TestQueryRewritingConfig:
     def test_default_config_valid(self):
         cfg = QueryRewritingConfig()
         assert cfg.enabled is True
-        assert cfg.model_name == "gemini-2.5-flash"
+        assert cfg.model_name == "nvidia/nemotron-3-ultra-550b-a55b:free"
         assert cfg.temperature == 0.0
         assert cfg.max_history_messages == 5
         assert cfg.max_query_length == 500
@@ -223,6 +224,115 @@ class TestQueryRewritingService:
         assert "=== CURRENT USER QUERY ===" in prompt
         assert "What is the battery life?" in prompt
         assert "UNTRUSTED INPUT DEFENSE" in QUERY_REWRITING_SYSTEM_INSTRUCTION
+
+
+class TestOpenRouterQueryRewriter:
+    """Test OpenRouterQueryRewriter provider with mocked HTTP endpoints."""
+
+    def test_missing_api_key_raises_error(self):
+        rewriter = OpenRouterQueryRewriter(api_key=SecretStr(""))
+        with pytest.raises(QueryRewriterError, match="OPENROUTER_API_KEY is not configured"):
+            rewriter.rewrite(query="What about it?", conversation_history="User: Hello\nAssistant: Hi")
+
+    def test_no_history_bypasses_api_call(self):
+        rewriter = OpenRouterQueryRewriter(api_key=SecretStr("valid-key"))
+        with patch("httpx.Client.post") as mock_post:
+            res = rewriter.rewrite(query="What is the price?", conversation_history=None)
+            assert res.original_query == "What is the price?"
+            assert res.retrieval_query == "What is the price?"
+            assert res.was_rewritten is False
+            assert res.reason == "no_conversation_history"
+            mock_post.assert_not_called()
+
+    def test_successful_openrouter_query_rewriting(self):
+        mock_response_json = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "What is the battery replacement cost for the device?",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 40, "completion_tokens": 12},
+        }
+
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=200,
+                json=lambda: mock_response_json,
+            )
+
+            rewriter = OpenRouterQueryRewriter(api_key=SecretStr("valid-openrouter-key"))
+            res = rewriter.rewrite(
+                query="How much does it cost to replace?",
+                conversation_history="User: Tell me about the device battery.\nAssistant: It lasts 3 years.",
+            )
+
+            assert res.original_query == "How much does it cost to replace?"
+            assert res.retrieval_query == "What is the battery replacement cost for the device?"
+            assert res.was_rewritten is True
+
+            # Verify endpoint, headers, and model payload
+            mock_post.assert_called_once()
+            call_url = mock_post.call_args[0][0]
+            assert call_url == "https://openrouter.ai/api/v1/chat/completions"
+            headers = mock_post.call_args[1]["headers"]
+            assert headers["Authorization"] == "Bearer valid-openrouter-key"
+            payload = mock_post.call_args[1]["json"]
+            assert payload["model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+            assert payload["temperature"] == 0.0
+
+    def test_openrouter_http_error_handling(self):
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=500,
+                text="Internal Server Error: [SECRET_API_KEY]",
+            )
+
+            rewriter = OpenRouterQueryRewriter(api_key=SecretStr("SECRET_API_KEY"))
+            with pytest.raises(QueryRewriterError, match="OpenRouter API error"):
+                rewriter.rewrite(
+                    query="What about it?",
+                    conversation_history="User: Test\nAssistant: Test",
+                )
+
+    def test_openrouter_rate_limit_handling(self):
+        with patch("httpx.Client.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=429,
+                text="Rate limited",
+            )
+
+            rewriter = OpenRouterQueryRewriter(api_key=SecretStr("key-123"))
+            with pytest.raises(QueryRewriterError, match="rate limited"):
+                rewriter.rewrite(
+                    query="What about it?",
+                    conversation_history="User: Test\nAssistant: Test",
+                )
+
+    def test_openrouter_timeout_handling(self):
+        with patch("httpx.Client.post", side_effect=httpx.TimeoutException("Read timed out")):
+            rewriter = OpenRouterQueryRewriter(api_key=SecretStr("key-123"))
+            with pytest.raises(QueryRewriterError, match="timed out"):
+                rewriter.rewrite(
+                    query="What about it?",
+                    conversation_history="User: Test\nAssistant: Test",
+                )
+
+    def test_openrouter_malformed_json_handling(self):
+        with patch("httpx.Client.post") as mock_post:
+            mock_resp = MagicMock(status_code=200, text="non-json")
+            mock_resp.json.side_effect = ValueError("Invalid JSON")
+            mock_post.return_value = mock_resp
+
+            rewriter = OpenRouterQueryRewriter(api_key=SecretStr("key-123"))
+            with pytest.raises(QueryRewriterError, match="malformed JSON"):
+                rewriter.rewrite(
+                    query="What about it?",
+                    conversation_history="User: Test\nAssistant: Test",
+                )
 
 
 class TestGeminiQueryRewriter:

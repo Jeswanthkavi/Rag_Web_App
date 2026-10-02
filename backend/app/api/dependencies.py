@@ -19,7 +19,7 @@ from backend.app.embeddings.service import EmbeddingService
 from backend.app.vectorstore.service import VectorStoreService
 from backend.app.retrieval.service import RetrievalService
 from backend.app.llm.base import BaseLLMProvider
-from backend.app.llm.gemini import GeminiProvider
+from backend.app.llm.openrouter import OpenRouterProvider
 from backend.app.rag.service import RAGService
 
 settings = get_settings()
@@ -125,7 +125,7 @@ def get_hybrid_retrieval_service(
 
 def get_llm_provider() -> BaseLLMProvider:
     """Dependency for providing an instance of BaseLLMProvider."""
-    return GeminiProvider()
+    return OpenRouterProvider()
 
 
 def get_rag_service(

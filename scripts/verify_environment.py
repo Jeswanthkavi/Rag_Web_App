@@ -59,7 +59,7 @@ def check_env_variables():
     
     config = dotenv_values(".env")
     required_keys = [
-        "GEMINI_API_KEY",
+        "OPENROUTER_API_KEY",
         "DATABASE_URL",
         "TEST_DATABASE_URL",
         "QDRANT_URL",

@@ -31,7 +31,7 @@ graph TD
     subgraph Storage & Infrastructure Layer
         MySQL[(MySQL 8.0: App State & Metadata)]
         Qdrant[(Qdrant: Vector Database)]
-        Gemini[Google Gemini API]
+        OpenRouter[OpenRouter API: NVIDIA Nemotron 3 Ultra]
         LocalDisk[Secure Local File Storage]
     end
 
@@ -50,7 +50,7 @@ graph TD
     
     RAGSvc --> RetrievalSvc
     RetrievalSvc --> VectorSvc
-    RAGSvc --> Gemini
+    RAGSvc --> OpenRouter
     RAGSvc --> MySQL
 ```
 
@@ -85,9 +85,10 @@ Stores high-dimensional dense embeddings derived from document chunks:
   - `filename` (String original source name)
   - `text` (String chunk payload)
 
-### 2.4 LLM & Grounding Engine (Google Gemini)
-- Utilizes Google Gemini models for query reformulation, conversational synthesis, and strict context-grounded response generation.
-- Strict system prompts enforce that generation answers strictly from retrieved source context with cited references.
+### 2.4 LLM & Grounding Engine (OpenRouter / NVIDIA Nemotron 3 Ultra)
+- Utilizes OpenRouter's OpenAI-compatible Chat Completions endpoint (`https://openrouter.ai/api/v1/chat/completions`) with the `nvidia/nemotron-3-ultra-550b-a55b:free` model for conversational query reformulation and context-grounded response generation.
+- Strict system prompts enforce that generation answers strictly from retrieved source context with cited references (`[Source N]`).
+- *Advisory*: Free tier endpoints are rate limited; users should avoid submitting personal or confidential information to free shared endpoints.
 
 ---
 

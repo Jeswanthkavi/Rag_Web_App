@@ -1,6 +1,6 @@
 # Advanced RAG Platform
 
-A production-grade, local-first, multi-tenant Retrieval-Augmented Generation (RAG) platform featuring hierarchical document ingestion, local dense vector embeddings, BM25 lexical search, Reciprocal Rank Fusion (RRF), Cross-Encoder reranking, conversational memory with query rewriting, grounded LLM synthesis via Google Gemini, verified inline citations, security hardening, performance optimizations, and full Docker orchestration.
+A production-grade, local-first, multi-tenant Retrieval-Augmented Generation (RAG) platform featuring hierarchical document ingestion, local dense vector embeddings, BM25 lexical search, Reciprocal Rank Fusion (RRF), Cross-Encoder reranking, conversational memory with query rewriting, grounded LLM synthesis via OpenRouter (NVIDIA Nemotron 3 Ultra), verified inline citations, security hardening, performance optimizations, and full Docker orchestration.
 
 ---
 
@@ -16,7 +16,7 @@ User / Browser (Next.js 14 + React 18 + TypeScript)
 Document Ingestion   Hybrid Retrieval     Conversational RAG
  - PDF/DOCX/TXT       - Local Dense MiniLM - Query Rewriting
  - Hierarchical Chunk - BM25 Lexical Cache - Context Builder
- - SHA-256 Dedupl.    - RRF Fusion (k=60)  - Gemini LLM
+ - SHA-256 Dedupl.    - RRF Fusion (k=60)  - OpenRouter (Nemotron)
                       - Cross-Encoder Rerank Verified Citations
    │                   │                   │
    └───────────┬───────┴───────────────────┘
@@ -45,7 +45,10 @@ For in-depth architecture and operational documentation:
 - **Local Dense Embeddings**: `sentence-transformers/all-MiniLM-L6-v2` (Local, zero API cost)
 - **Lexical Keyword Search**: `BM25Okapi` with thread-safe `TenantBM25Cache`
 - **Reranker**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (Local inference)
-- **LLM Synthesis**: Google Gemini (`gemini-2.5-flash`) with strict anti-injection grounding
+- **LLM Synthesis & Query Rewriting**: OpenRouter (`nvidia/nemotron-3-ultra-550b-a55b:free`) with strict anti-injection grounding
+  - *Endpoint*: `https://openrouter.ai/api/v1/chat/completions`
+  - *Advisory*: The free Nemotron endpoint is subject to provider rate limits and should not be treated as unlimited production inference.
+  - *Privacy Notice*: Do not upload confidential, sensitive, or personal data when using free-tier shared LLM endpoints.
 - **Security**: Argon2id password hashing, JWT authentication, sliding-window rate limiting, OWASP headers, payload size bounds
 
 ---
@@ -74,7 +77,8 @@ Key environment variables:
 | `DATABASE_URL` | `mysql+pymysql://root:@localhost:3306/advanced_rag` | Primary MySQL database URL |
 | `TEST_DATABASE_URL` | `mysql+pymysql://root:@localhost:3306/advanced_rag_test` | Dedicated isolated test database |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant vector database HTTP URL |
-| `GEMINI_API_KEY` | `your_api_key_here` | Google Gemini API Key for synthesis |
+| `OPENROUTER_API_KEY` | `your_api_key_here` | OpenRouter API Key for synthesis and query rewriting |
+| `OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | Model identifier on OpenRouter |
 | `JWT_SECRET_KEY` | `secure_random_key` | Secret key for signing user JWTs |
 | `SECRET_KEY` | `secure_random_key` | Application core cryptographic secret |
 

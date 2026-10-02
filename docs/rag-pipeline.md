@@ -21,7 +21,7 @@ JWT Authentication → Conversation Validation → Bounded Conversation History
                    → Cross-Encoder Reranking (Re-orders fused candidates -> final_top_k=5) [Phase 16]
                    → Structured Context Construction ([Source 1], [Source 2])
                    → Grounded LLM Prompt Assembly (Answers ORIGINAL User Query)
-                   → Gemini LLM Generation → Citation Verification [Phase 13]
+                   → OpenRouter (NVIDIA Nemotron 3 Ultra) LLM Generation → Citation Verification [Phase 13]
                    → User & Assistant Message Persistence → Structured RAGResponse [Phase 14]
 ```
 
@@ -104,7 +104,7 @@ Transforms an ambiguous or follow-up conversational query (e.g., *"What about th
     - Cross-encoder reranker scoring
 - **Provider Abstraction**:
   - `BaseQueryRewriter`: Abstract interface defining `.rewrite(query, conversation_history)`.
-  - `GeminiQueryRewriter`: Production implementation calling Gemini REST API with zero temperature (`temperature=0.0`).
+  - `OpenRouterQueryRewriter`: Production implementation calling OpenRouter REST API with `nvidia/nemotron-3-ultra-550b-a55b:free` and zero temperature (`temperature=0.0`).
   - `FakeQueryRewriter`: Deterministic provider for unit and integration testing.
 - **Rewriting Rules & Guardrails**:
   1. Produces a standalone search query that can be understood in isolation.

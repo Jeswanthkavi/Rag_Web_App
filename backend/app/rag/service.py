@@ -9,7 +9,7 @@ from backend.app.citations.parser import CitationParser
 from backend.app.hybrid_retrieval.base import HybridRetrievalError
 from backend.app.hybrid_retrieval.service import HybridRetrievalService
 from backend.app.llm.base import BaseLLMProvider, LLMProviderError
-from backend.app.llm.gemini import GeminiProvider
+from backend.app.llm.openrouter import OpenRouterProvider
 from backend.app.query_rewriting.service import QueryRewritingService
 from backend.app.rag.config import RAGConfig
 from backend.app.rag.context_builder import ContextBuilder
@@ -49,7 +49,7 @@ class RAGService:
     ):
         self.config = config or RAGConfig.from_settings()
         self.retrieval_service = retrieval_service or RetrievalService()
-        self.llm_provider = llm_provider or GeminiProvider()
+        self.llm_provider = llm_provider or OpenRouterProvider()
         self.context_builder = context_builder or ContextBuilder()
         self.prompt_builder = prompt_builder or PromptBuilder()
         self.citation_parser = citation_parser or CitationParser()

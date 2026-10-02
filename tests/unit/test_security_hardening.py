@@ -185,6 +185,16 @@ class TestSecretMaskingSecurity:
                 assert "***" in user_info
 
         # Secrets should not be exposed in cleartext
-        assert "gemini_api_key" not in summary["gemini"] or isinstance(summary["gemini"]["api_key_configured"], bool)
-        assert summary["gemini"]["api_key_configured"] is True
+        assert "openrouter_api_key" not in summary["openrouter"] or isinstance(summary["openrouter"]["api_key_configured"], bool)
+        assert summary["openrouter"]["api_key_configured"] is True
         assert summary["security"]["enable_security_headers"] is True
+
+    def test_health_and_ready_endpoints_do_not_expose_secrets(self):
+        client = TestClient(app)
+        for endpoint in ["/health", "/ready"]:
+            resp = client.get(endpoint)
+            assert resp.status_code in [200, 503]
+            body_text = resp.text.lower()
+            assert "sk-or-v1" not in body_text
+            assert "openrouter_api_key" not in body_text
+            assert "secret_key" not in body_text
