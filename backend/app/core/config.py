@@ -178,6 +178,11 @@ class RetrievalSettings(BaseModel):
         return self
 
 
+class ConversationSettings(BaseModel):
+    """Conversation memory and multi-turn context settings."""
+    max_history_messages: int = Field(default=10, ge=1, le=100, description="Maximum number of historical conversation turns to supply as context")
+
+
 class LoggingSettings(BaseModel):
     """Application logging configuration."""
     log_level: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL")
@@ -264,6 +269,9 @@ class Settings(BaseSettings):
     enable_reranking: bool = False
     reranking_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranking_top_k: int = 3
+
+    # Conversation Memory
+    max_history_messages: int = 10
 
     # Logging
     log_level: str = "INFO"
@@ -380,6 +388,12 @@ class Settings(BaseSettings):
             enable_reranking=self.enable_reranking,
             reranking_model=self.reranking_model,
             reranking_top_k=self.reranking_top_k,
+        )
+
+    @property
+    def conversation(self) -> ConversationSettings:
+        return ConversationSettings(
+            max_history_messages=self.max_history_messages,
         )
 
     @property

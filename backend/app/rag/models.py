@@ -1,7 +1,6 @@
-"""Data models and exceptions for grounded RAG generation."""
-
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, ConfigDict
+from backend.app.citations.models import Citation
 
 
 class RAGError(Exception):
@@ -24,13 +23,17 @@ class RAGQuery(BaseModel):
         default=None, ge=0.0, le=1.0, description="Minimum cosine similarity score threshold"
     )
     document_id: Optional[str] = Field(default=None, description="Optional document ID scoping filter")
+    conversation_id: Optional[str] = Field(default=None, description="Optional conversation session ID for multi-turn context")
 
 
 class RAGResponse(BaseModel):
-    """Structured response containing generated grounded answer and retrieval context count."""
+    """Structured response containing generated grounded answer, citations, and conversation metadata."""
     model_config = ConfigDict(from_attributes=True)
 
     query: str = Field(..., description="The validated natural language query")
     answer: str = Field(..., description="The grounded answer synthesized from retrieved document context")
     retrieved_context_count: int = Field(..., ge=0, description="Number of context chunks retrieved and used for generation")
+    citations: List[Citation] = Field(default_factory=list, description="Authoritative verified citations for claims made in the answer")
+    conversation_id: Optional[str] = Field(default=None, description="Associated conversation thread ID")
+    message_id: Optional[str] = Field(default=None, description="Unique ID of the generated assistant message record")
     model_name: Optional[str] = Field(default=None, description="LLM model identifier used for generation")

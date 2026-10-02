@@ -68,42 +68,106 @@ All endpoints are versioned under `/api/v1` and return standardized JSON respons
 
 ---
 
-## 4. Grounded RAG Generation (`/api/v1/rag`)
+## 4. Grounded RAG Generation & Citations (`/api/v1/rag`)
 
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|---|
-| `POST` | `/api/v1/rag/query` | Execute grounded RAG answer generation against user's documents | Yes (Bearer JWT) |
+| `POST` | `/api/v1/rag/query` | Execute grounded RAG answer generation with citation verification and conversation memory | Yes (Bearer JWT) |
 
 ### Request Body (`POST /api/v1/rag/query`)
 ```json
 {
-  "query": "How is the system deployed?",
+  "query": "What is the warranty period for the solar battery?",
   "top_k": 5,
   "similarity_threshold": 0.5,
-  "document_id": "optional-document-uuid"
+  "document_id": "optional-document-uuid",
+  "conversation_id": "optional-conversation-uuid"
 }
 ```
 
 ### Response Body (`200 OK`)
 ```json
 {
-  "query": "How is the system deployed?",
-  "answer": "Based on the retrieved context, the system uses microservices deployed on Kubernetes with auto-scaling.",
+  "query": "What is the warranty period for the solar battery?",
+  "answer": "According to the warranty guide [Source 1], the battery includes a 10-year replacement warranty.",
   "retrieved_context_count": 2,
+  "citations": [
+    {
+      "citation_id": "source_1",
+      "document_id": "doc-123-uuid",
+      "chunk_id": "chunk-456-uuid",
+      "filename": "warranty_guide.docx",
+      "page_number": null,
+      "chunk_index": 0
+    }
+  ],
+  "conversation_id": "conv-uuid-1",
+  "message_id": "msg-assistant-uuid",
   "model_name": "gemini-2.5-flash"
 }
 ```
 
 ---
 
-## 5. Conversations & Messages (`/api/v1/conversations`) - Phase 14
+## 5. Conversations & Messages (`/api/v1/conversations`)
 
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|---|
-| `GET` | `/api/v1/conversations` | List user's conversation sessions | Yes |
-| `POST` | `/api/v1/conversations` | Create a new conversation session | Yes |
-| `GET` | `/api/v1/conversations/{conversation_id}` | Retrieve conversation turn history | Yes |
-| `DELETE` | `/api/v1/conversations/{conversation_id}` | Delete a conversation and its messages | Yes |
+| `GET` | `/api/v1/conversations` | List user's conversation sessions | Yes (Bearer JWT) |
+| `POST` | `/api/v1/conversations` | Create a new conversation session | Yes (Bearer JWT) |
+| `GET` | `/api/v1/conversations/{conversation_id}` | Retrieve conversation detail with chronological message history | Yes (Bearer JWT) |
+| `PATCH` | `/api/v1/conversations/{conversation_id}` | Update conversation title | Yes (Bearer JWT) |
+| `DELETE` | `/api/v1/conversations/{conversation_id}` | Delete a conversation and cascade delete its messages | Yes (Bearer JWT) |
+
+### Request Body (`POST /api/v1/conversations`)
+```json
+{
+  "title": "Solar Research Project"
+}
+```
+
+### Response Body (`200 OK` / `GET /api/v1/conversations/{id}`)
+```json
+{
+  "id": "conv-uuid-1",
+  "user_id": "user-uuid-1",
+  "title": "Solar Research Project",
+  "created_at": "2026-10-02T10:00:00Z",
+  "updated_at": "2026-10-02T10:05:00Z",
+  "messages": [
+    {
+      "id": "msg-1",
+      "conversation_id": "conv-uuid-1",
+      "role": "USER",
+      "content": "What is the solar efficiency?",
+      "citations": null,
+      "token_metrics": null,
+      "created_at": "2026-10-02T10:00:00Z"
+    },
+    {
+      "id": "msg-2",
+      "conversation_id": "conv-uuid-1",
+      "role": "ASSISTANT",
+      "content": "Solar panel efficiency is 22% [Source 1].",
+      "citations": [
+        {
+          "citation_id": "source_1",
+          "document_id": "doc-uuid",
+          "chunk_id": "chunk-uuid",
+          "filename": "solar_specs.pdf",
+          "page_number": 3,
+          "chunk_index": 0
+        }
+      ],
+      "token_metrics": {
+        "prompt_tokens": 120,
+        "completion_tokens": 15
+      },
+      "created_at": "2026-10-02T10:00:02Z"
+    }
+  ]
+}
+```
 
 ---
 

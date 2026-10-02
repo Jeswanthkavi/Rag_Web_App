@@ -19,7 +19,7 @@ class ContextBuilder:
         context_blocks: List[str] = []
         for idx, item in enumerate(results, start=1):
             page_info = f" (Page {item.page_number})" if item.page_number is not None else ""
-            header = f"[Context {idx}]\nDocument: {item.filename}{page_info}"
+            header = f"[Source {idx}]\nDocument: {item.filename}{page_info}\nChunk ID: {item.chunk_id}"
             body = f"Content:\n{item.chunk_text.strip()}"
             context_blocks.append(f"{header}\n{body}")
 

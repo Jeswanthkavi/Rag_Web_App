@@ -1,9 +1,11 @@
-"""Grounded RAG generation service orchestrating semantic retrieval, context assembly, and LLM synthesis."""
+"""Grounded RAG generation service orchestrating semantic retrieval, context assembly, citations, and LLM synthesis."""
 
 import logging
 import time
-from typing import Optional
+from typing import List, Optional
 
+from backend.app.citations.models import Citation
+from backend.app.citations.parser import CitationParser
 from backend.app.llm.base import BaseLLMProvider, LLMProviderError
 from backend.app.llm.gemini import GeminiProvider
 from backend.app.rag.config import RAGConfig
@@ -17,12 +19,16 @@ from backend.app.rag.models import (
 from backend.app.rag.prompts import PromptBuilder
 from backend.app.retrieval.models import RetrievalError, RetrievalValidationError
 from backend.app.retrieval.service import RetrievalService
+from backend.app.services.conversation_service import (
+    ConversationNotFoundError,
+    ConversationService,
+)
 
 logger = logging.getLogger("app.rag.service")
 
 
 class RAGService:
-    """Production RAG service coordinating retrieval and grounded LLM answer generation."""
+    """Production RAG service coordinating retrieval, conversation memory, citation validation, and LLM synthesis."""
 
     def __init__(
         self,
@@ -31,12 +37,16 @@ class RAGService:
         config: Optional[RAGConfig] = None,
         context_builder: Optional[ContextBuilder] = None,
         prompt_builder: Optional[PromptBuilder] = None,
+        citation_parser: Optional[CitationParser] = None,
+        conversation_service: Optional[ConversationService] = None,
     ):
         self.config = config or RAGConfig.from_settings()
         self.retrieval_service = retrieval_service or RetrievalService()
         self.llm_provider = llm_provider or GeminiProvider()
         self.context_builder = context_builder or ContextBuilder()
         self.prompt_builder = prompt_builder or PromptBuilder()
+        self.citation_parser = citation_parser or CitationParser()
+        self.conversation_service = conversation_service
 
     def validate_query(self, query: str) -> str:
         """Validates and trims user query string."""
@@ -61,17 +71,21 @@ class RAGService:
         top_k: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
         document_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
     ) -> RAGResponse:
-        """Executes grounded RAG generation for an authenticated user query.
+        """Executes grounded RAG generation with citations and optional conversation history.
         
         Workflow:
         1. Validate query and tenant identity.
-        2. Perform tenant-isolated semantic retrieval via RetrievalService.
-        3. If no matching chunks are retrieved, immediately return no_context_message without calling LLM.
-        4. Assemble structured context from retrieved chunks.
-        5. Construct grounding prompt with prompt injection barriers.
-        6. Invoke LLMProvider (Gemini) to generate grounded completion.
-        7. Return structured RAGResponse.
+        2. If conversation_id is supplied, validate ownership, load bounded history, and record user turn.
+        3. Perform tenant-isolated semantic retrieval via RetrievalService.
+        4. If no matching chunks are retrieved, return deterministic no-context response (0 LLM cost).
+        5. Assemble structured context with deterministic source labels ([Source 1], [Source 2]).
+        6. Construct grounded prompt with conversation history and anti-injection demarcations.
+        7. Invoke LLMProvider (Gemini) to generate grounded completion with citations.
+        8. Parse and verify citations against authoritative retrieved results.
+        9. If conversation_id is supplied, record assistant turn with verified citations.
+        10. Return structured RAGResponse.
         """
         # 1. Validation
         sanitized_query = self.validate_query(query)
@@ -80,8 +94,30 @@ class RAGService:
             raise RAGValidationError("user_id is required for tenant-isolated RAG generation.")
         clean_user_id = user_id.strip()
         clean_doc_id = document_id.strip() if document_id and document_id.strip() else None
+        clean_conv_id = conversation_id.strip() if conversation_id and conversation_id.strip() else None
 
-        # 2. Semantic Retrieval
+        # 2. Conversation Memory Integration (if conversation_id provided)
+        conversation_history_text: Optional[str] = None
+        if clean_conv_id:
+            if not self.conversation_service:
+                raise RAGError("Conversation service is not configured for conversation-linked RAG queries.")
+            try:
+                # Load prior history before saving current turn
+                conversation_history_text = self.conversation_service.get_bounded_history_for_prompt(
+                    conversation_id=clean_conv_id,
+                    user_id=clean_user_id,
+                    max_messages=self.config.max_history_messages,
+                )
+                # Record the incoming user query
+                self.conversation_service.record_user_message(
+                    conversation_id=clean_conv_id,
+                    user_id=clean_user_id,
+                    content=sanitized_query,
+                )
+            except ConversationNotFoundError as e:
+                raise RAGValidationError(str(e)) from e
+
+        # 3. Semantic Retrieval
         try:
             start_retrieval = time.perf_counter()
             retrieval_response = self.retrieval_service.search(
@@ -102,7 +138,7 @@ class RAGService:
             logger.error(f"Retrieval step failed during RAG query: {sanitized}")
             raise RAGError(f"Retrieval failed: {sanitized}") from e
 
-        # 3. No-Context Guard
+        # 4. No-Context Guard
         if not retrieval_response.results:
             logger.info(
                 f"No relevant context retrieved for query '{sanitized_query[:30]}...'. Returning deterministic no-context response."
@@ -111,23 +147,37 @@ class RAGService:
             if model_name is not None and not isinstance(model_name, str):
                 model_name = str(model_name)
 
+            assistant_msg_id: Optional[str] = None
+            if clean_conv_id and self.conversation_service:
+                assistant_msg = self.conversation_service.record_assistant_message(
+                    conversation_id=clean_conv_id,
+                    user_id=clean_user_id,
+                    content=self.config.no_context_message,
+                    citations=[],
+                )
+                assistant_msg_id = assistant_msg.id
+
             return RAGResponse(
                 query=sanitized_query,
                 answer=self.config.no_context_message,
                 retrieved_context_count=0,
+                citations=[],
+                conversation_id=clean_conv_id,
+                message_id=assistant_msg_id,
                 model_name=model_name,
             )
 
-        # 4. Context Assembly
+        # 5. Context Assembly
         formatted_context = self.context_builder.build_context(retrieval_response.results)
 
-        # 5. Prompt Construction
+        # 6. Prompt Construction
         user_prompt = self.prompt_builder.build_user_prompt(
             query=sanitized_query,
             formatted_context=formatted_context,
+            conversation_history=conversation_history_text,
         )
 
-        # 6. LLM Generation
+        # 7. LLM Generation
         try:
             start_llm = time.perf_counter()
             llm_response = self.llm_provider.generate(
@@ -141,19 +191,43 @@ class RAGService:
                 f"LLM generation succeeded in {llm_duration:.3f}s (model={llm_response.model_name}, chunks={len(retrieval_response.results)})"
             )
 
-            if not llm_response.text or not llm_response.text.strip():
+            answer_text = llm_response.text.strip() if llm_response.text else ""
+            if not answer_text:
                 logger.warning("LLM provider returned an empty completion string.")
-                return RAGResponse(
-                    query=sanitized_query,
-                    answer=self.config.no_context_message,
-                    retrieved_context_count=len(retrieval_response.results),
-                    model_name=llm_response.model_name,
+                answer_text = self.config.no_context_message
+
+            # 8. Citation Extraction & Verification
+            citations: List[Citation] = []
+            if self.config.enable_citations and answer_text != self.config.no_context_message:
+                citations = self.citation_parser.parse_and_verify(
+                    answer_text=answer_text,
+                    retrieved_results=retrieval_response.results,
                 )
+
+            # 9. Record Assistant Message in Conversation History
+            assistant_msg_id: Optional[str] = None
+            if clean_conv_id and self.conversation_service:
+                citations_payload = [c.model_dump() for c in citations] if citations else []
+                token_metrics = {
+                    "prompt_tokens": llm_response.prompt_tokens,
+                    "completion_tokens": llm_response.completion_tokens,
+                }
+                assistant_msg = self.conversation_service.record_assistant_message(
+                    conversation_id=clean_conv_id,
+                    user_id=clean_user_id,
+                    content=answer_text,
+                    citations=citations_payload,
+                    token_metrics=token_metrics,
+                )
+                assistant_msg_id = assistant_msg.id
 
             return RAGResponse(
                 query=sanitized_query,
-                answer=llm_response.text.strip(),
+                answer=answer_text,
                 retrieved_context_count=len(retrieval_response.results),
+                citations=citations,
+                conversation_id=clean_conv_id,
+                message_id=assistant_msg_id,
                 model_name=llm_response.model_name,
             )
 

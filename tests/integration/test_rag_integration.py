@@ -388,3 +388,124 @@ class TestGroundedRAGIntegration:
         assert resp.retrieved_context_count == 0
         assert resp.answer == DEFAULT_NO_CONTEXT_MESSAGE
         assert fake_llm.call_count == 0
+
+    def test_e2e_rag_generation_with_citations(
+        self,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        user_1 = indexed_rag_documents["user_1"]
+        doc_1a = indexed_rag_documents["doc_1a"]
+        fake_llm = FakeLLMProvider(
+            model_name="gemini-2.5-flash",
+            custom_response="The architecture uses microservices with Kubernetes [Source 1].",
+        )
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=fake_llm,
+        )
+
+        resp = rag_service.generate_answer(
+            query="How is the system deployed?",
+            user_id=str(user_1.id),
+            document_id=str(doc_1a.id),
+            top_k=2,
+            similarity_threshold=0.0,
+        )
+
+        assert len(resp.citations) >= 1
+        cit = resp.citations[0]
+        assert cit.citation_id == "source_1"
+        assert cit.document_id == str(doc_1a.id)
+        assert cit.filename == "cloud_architecture.pdf"
+        assert cit.page_number is not None
+
+    def test_multi_turn_conversation_flow(
+        self,
+        db_session: Session,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        user_1 = indexed_rag_documents["user_1"]
+        from backend.app.services.conversation_service import ConversationService
+        conv_service = ConversationService(db=db_session)
+
+        # 1. Create a conversation
+        conv = conv_service.create_conversation(user_id=str(user_1.id), title="DevOps Chat")
+
+        fake_llm = FakeLLMProvider(
+            model_name="gemini-2.5-flash",
+            custom_response="The system uses auto-scaling on Kubernetes [Source 1].",
+        )
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=fake_llm,
+            conversation_service=conv_service,
+        )
+
+        # 2. Turn 1: Ask initial question
+        resp_1 = rag_service.generate_answer(
+            query="How is the application deployed?",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+
+        assert resp_1.conversation_id == conv.id
+        assert resp_1.message_id is not None
+        assert len(resp_1.citations) >= 1
+
+        # 3. Turn 2: Follow-up question
+        fake_llm.last_prompt = None
+        fake_llm._custom_response = "Database replication has an RPO of 5 minutes [Source 1]."
+
+        resp_2 = rag_service.generate_answer(
+            query="What is the database recovery objective?",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+
+        # Verify prompt received prior conversation history
+        assert fake_llm.last_prompt is not None
+        assert "=== CONVERSATION HISTORY" in fake_llm.last_prompt
+        assert "User: How is the application deployed?" in fake_llm.last_prompt
+        assert "The system uses auto-scaling on Kubernetes" in fake_llm.last_prompt
+
+        # Verify message persistence in DB
+        messages = conv_service.msg_repo.list_by_conversation(conv.id)
+        assert len(messages) == 4
+        assert messages[0].content == "How is the application deployed?"
+        assert messages[1].citations is not None
+        assert messages[2].content == "What is the database recovery objective?"
+        assert messages[3].citations is not None
+
+    def test_cross_tenant_conversation_rejected_in_rag(
+        self,
+        db_session: Session,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        user_1 = indexed_rag_documents["user_1"]
+        user_2 = indexed_rag_documents["user_2"]
+        from backend.app.services.conversation_service import ConversationService
+        conv_service = ConversationService(db=db_session)
+
+        # User 1 creates conversation
+        conv_1 = conv_service.create_conversation(user_id=str(user_1.id), title="User 1 Thread")
+
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=FakeLLMProvider(),
+            conversation_service=conv_service,
+        )
+
+        # User 2 attempts to query User 1's conversation
+        from backend.app.rag.models import RAGValidationError
+        with pytest.raises(RAGValidationError, match="not found or unauthorized"):
+            rag_service.generate_answer(
+                query="Unauthorized query",
+                user_id=str(user_2.id),
+                conversation_id=conv_1.id,
+            )
+

@@ -138,6 +138,7 @@ class TestRAGAPI:
                 top_k=3,
                 similarity_threshold=0.6,
                 document_id=None,
+                conversation_id=None,
             )
         finally:
             app.dependency_overrides.pop(get_rag_service, None)
@@ -171,5 +172,63 @@ class TestRAGAPI:
             )
             assert response.status_code == 502
             assert "Grounded answer generation failed" in response.json()["detail"]
+        finally:
+            app.dependency_overrides.pop(get_rag_service, None)
+
+    def test_rag_query_returns_structured_citations(self, client: TestClient, auth_headers: dict, test_user: User):
+        mock_rag_service = MagicMock(spec=RAGService)
+        mock_rag_service.generate_answer.return_value = RAGResponse(
+            query="What is the policy?",
+            answer="According to the policy [Source 1], refunds take 30 days.",
+            retrieved_context_count=1,
+            citations=[
+                {
+                    "citation_id": "source_1",
+                    "document_id": "doc-uuid-1",
+                    "chunk_id": "chunk-uuid-1",
+                    "filename": "policy.pdf",
+                    "page_number": 2,
+                    "chunk_index": 0,
+                }
+            ],
+            conversation_id="conv-uuid-1",
+            message_id="msg-uuid-1",
+            model_name="gemini-2.5-flash",
+        )
+
+        app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
+        try:
+            response = client.post(
+                "/api/v1/rag/query",
+                json={
+                    "query": "What is the policy?",
+                    "conversation_id": "conv-uuid-1",
+                },
+                headers=auth_headers,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["citations"]) == 1
+            assert data["citations"][0]["citation_id"] == "source_1"
+            assert data["citations"][0]["filename"] == "policy.pdf"
+            assert data["citations"][0]["page_number"] == 2
+            assert data["conversation_id"] == "conv-uuid-1"
+            assert data["message_id"] == "msg-uuid-1"
+        finally:
+            app.dependency_overrides.pop(get_rag_service, None)
+
+    def test_rag_conversation_not_found_mapped_to_404(self, client: TestClient, auth_headers: dict):
+        mock_rag_service = MagicMock(spec=RAGService)
+        mock_rag_service.generate_answer.side_effect = RAGValidationError("Conversation 'non-existent' not found or unauthorized.")
+
+        app.dependency_overrides[get_rag_service] = lambda: mock_rag_service
+        try:
+            response = client.post(
+                "/api/v1/rag/query",
+                json={"query": "Valid query", "conversation_id": "non-existent"},
+                headers=auth_headers,
+            )
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"]
         finally:
             app.dependency_overrides.pop(get_rag_service, None)

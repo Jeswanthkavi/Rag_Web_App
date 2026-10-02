@@ -37,14 +37,21 @@ def rag_query(
             top_k=request.top_k,
             similarity_threshold=request.similarity_threshold,
             document_id=request.document_id,
+            conversation_id=request.conversation_id,
         )
         return response
 
     except RAGValidationError as e:
         logger.warning(f"RAG validation error for user '{current_user.id}': {e}")
+        err_msg = str(e)
+        if "Conversation" in err_msg and "not found" in err_msg:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=err_msg,
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(e),
+            detail=err_msg,
         ) from e
 
     except RAGError as e:

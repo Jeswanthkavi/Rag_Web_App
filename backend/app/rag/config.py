@@ -18,6 +18,8 @@ class RAGConfig:
     temperature: float = 0.2
     max_tokens: int = 2048
     max_query_length: int = 1000
+    max_history_messages: int = 10
+    enable_citations: bool = True
     no_context_message: str = DEFAULT_NO_CONTEXT_MESSAGE
 
     def __post_init__(self):
@@ -36,6 +38,10 @@ class RAGConfig:
             raise ValueError(
                 f"max_query_length must be between 10 and 10000, got {self.max_query_length}"
             )
+        if not (1 <= self.max_history_messages <= 100):
+            raise ValueError(
+                f"max_history_messages must be between 1 and 100, got {self.max_history_messages}"
+            )
 
     @classmethod
     def from_settings(
@@ -45,6 +51,7 @@ class RAGConfig:
         similarity_threshold: Optional[float] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        max_history_messages: Optional[int] = None,
     ) -> "RAGConfig":
         """Builds RAGConfig from application Pydantic settings with optional overrides."""
         s = settings or get_settings()
@@ -56,10 +63,16 @@ class RAGConfig:
         )
         temp = temperature if temperature is not None else s.gemini.gemini_temperature
         tokens = max_tokens if max_tokens is not None else s.gemini.gemini_max_tokens
+        history = (
+            max_history_messages
+            if max_history_messages is not None
+            else s.conversation.max_history_messages
+        )
 
         return cls(
             top_k=k,
             similarity_threshold=thresh,
             temperature=temp,
             max_tokens=tokens,
+            max_history_messages=history,
         )

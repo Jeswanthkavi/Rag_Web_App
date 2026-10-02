@@ -125,36 +125,56 @@ class TestContextBuilder:
         ]
 
         context = builder.build_context(results)
-        assert "[Context 1]" in context
+        assert "[Source 1]" in context
         assert "Document: document.pdf (Page 2)" in context
+        assert "Chunk ID: c1-uuid" in context
         assert "First chunk from page 2." in context
 
-        assert "[Context 2]" in context
+        assert "[Source 2]" in context
         assert "Document: notes.txt" in context
-        assert "(Page" not in context.split("[Context 2]")[1]
+        assert "(Page" not in context.split("[Source 2]")[1]
+        assert "Chunk ID: c2-uuid" in context
         assert "Second chunk from unpaged text." in context
 
 
 class TestPromptBuilder:
-    """Tests for PromptBuilder system instructions and injection barriers."""
+    """Tests for PromptBuilder system instructions, citations, and conversation history."""
 
-    def test_system_instruction_contains_grounding_and_defense_rules(self):
+    def test_system_instruction_contains_grounding_and_citation_rules(self):
         builder = PromptBuilder()
         assert "ONLY the factual information present in the RETRIEVED CONTEXT" in builder.system_instruction
+        assert "CITATION REQUIREMENT" in builder.system_instruction
         assert "UNTRUSTED CONTENT DEFENSE" in builder.system_instruction
+        assert "CONVERSATION HISTORY" in builder.system_instruction
         assert "I do not have enough information" in builder.system_instruction
 
-    def test_user_prompt_demarcations(self):
+    def test_user_prompt_demarcations_without_history(self):
         builder = PromptBuilder()
         prompt = builder.build_user_prompt(
             query="What is the refund deadline?",
-            formatted_context="[Context 1]\nDocument: policy.pdf\nContent: Refunds are 30 days.",
+            formatted_context="[Source 1]\nDocument: policy.pdf\nContent: Refunds are 30 days.",
         )
         assert "=== RETRIEVED CONTEXT ===" in prompt
         assert "Refunds are 30 days." in prompt
         assert "=== END OF CONTEXT ===" in prompt
         assert "=== USER QUESTION ===" in prompt
         assert "What is the refund deadline?" in prompt
+        assert "=== CONVERSATION HISTORY" not in prompt
+
+    def test_user_prompt_demarcations_with_history(self):
+        builder = PromptBuilder()
+        prompt = builder.build_user_prompt(
+            query="What about shipping fees?",
+            formatted_context="[Source 1]\nDocument: policy.pdf\nContent: Shipping is free for returns.",
+            conversation_history="User: What is the refund deadline?\nAssistant: 30 days [Source 1].",
+        )
+        assert "=== CONVERSATION HISTORY" in prompt
+        assert "User: What is the refund deadline?" in prompt
+        assert "Assistant: 30 days [Source 1]." in prompt
+        assert "=== END OF CONVERSATION HISTORY ===" in prompt
+        assert "=== RETRIEVED CONTEXT ===" in prompt
+        assert "=== USER QUESTION ===" in prompt
+        assert "What about shipping fees?" in prompt
 
 
 class TestRAGServiceUnit:
@@ -366,3 +386,114 @@ class TestRAGServiceUnit:
 
         with pytest.raises(RAGError, match="Answer generation failed"):
             service.generate_answer(query="test", user_id="user-1")
+
+    def test_rag_generation_extracts_and_verifies_citations(self):
+        mock_retrieval = MagicMock()
+        mock_retrieval.search.return_value = RetrievalResponse(
+            query="What is solar efficiency?",
+            results=[
+                RetrievalResult(
+                    chunk_id="chunk-101",
+                    document_id="doc-202",
+                    user_id="user-1",
+                    chunk_index=0,
+                    chunk_text="Solar cells achieve 22% conversion efficiency.",
+                    page_number=5,
+                    filename="specs.pdf",
+                    file_type=".pdf",
+                    token_count=10,
+                    score=0.92,
+                    rank=1,
+                )
+            ],
+            total_retrieved=1,
+            top_k=5,
+            similarity_threshold=0.5,
+        )
+
+        fake_llm = FakeLLMProvider(
+            custom_response="Solar cells achieve 22% conversion efficiency [Source 1]."
+        )
+
+        service = RAGService(
+            retrieval_service=mock_retrieval,
+            llm_provider=fake_llm,
+        )
+
+        resp = service.generate_answer(query="What is solar efficiency?", user_id="user-1")
+
+        assert len(resp.citations) == 1
+        cit = resp.citations[0]
+        assert cit.citation_id == "source_1"
+        assert cit.document_id == "doc-202"
+        assert cit.chunk_id == "chunk-101"
+        assert cit.filename == "specs.pdf"
+        assert cit.page_number == 5
+        assert cit.chunk_index == 0
+
+    def test_rag_generation_with_conversation_memory(self):
+        mock_retrieval = MagicMock()
+        mock_retrieval.search.return_value = RetrievalResponse(
+            query="What about battery degradation?",
+            results=[
+                RetrievalResult(
+                    chunk_id="chunk-b",
+                    document_id="doc-b",
+                    user_id="user-1",
+                    chunk_index=2,
+                    chunk_text="Battery capacity degrades by 2% per year under normal conditions.",
+                    page_number=1,
+                    filename="battery.pdf",
+                    file_type=".pdf",
+                    token_count=12,
+                    score=0.90,
+                    rank=1,
+                )
+            ],
+            total_retrieved=1,
+            top_k=5,
+            similarity_threshold=0.5,
+        )
+
+        fake_llm = FakeLLMProvider(
+            custom_response="Battery capacity degrades by 2% annually [Source 1]."
+        )
+
+        mock_conv_service = MagicMock()
+        mock_conv_service.get_bounded_history_for_prompt.return_value = (
+            "User: What is the warranty?\nAssistant: 10 years."
+        )
+        mock_assistant_msg = MagicMock()
+        mock_assistant_msg.id = "msg-assistant-123"
+        mock_conv_service.record_assistant_message.return_value = mock_assistant_msg
+
+        service = RAGService(
+            retrieval_service=mock_retrieval,
+            llm_provider=fake_llm,
+            conversation_service=mock_conv_service,
+        )
+
+        resp = service.generate_answer(
+            query="What about battery degradation?",
+            user_id="user-1",
+            conversation_id="conv-123",
+        )
+
+        # Verify user message recorded
+        mock_conv_service.record_user_message.assert_called_once_with(
+            conversation_id="conv-123",
+            user_id="user-1",
+            content="What about battery degradation?",
+        )
+
+        # Verify assistant message recorded with citations
+        mock_conv_service.record_assistant_message.assert_called_once()
+
+        # Verify prompt had conversation history
+        assert "=== CONVERSATION HISTORY" in fake_llm.last_prompt
+        assert "User: What is the warranty?" in fake_llm.last_prompt
+
+        # Verify response metadata
+        assert resp.conversation_id == "conv-123"
+        assert resp.message_id == "msg-assistant-123"
+        assert len(resp.citations) == 1
