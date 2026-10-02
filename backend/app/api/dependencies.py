@@ -18,6 +18,9 @@ from backend.app.chunking.service import ChunkingService
 from backend.app.embeddings.service import EmbeddingService
 from backend.app.vectorstore.service import VectorStoreService
 from backend.app.retrieval.service import RetrievalService
+from backend.app.llm.base import BaseLLMProvider
+from backend.app.llm.gemini import GeminiProvider
+from backend.app.rag.service import RAGService
 
 settings = get_settings()
 
@@ -79,6 +82,19 @@ def get_retrieval_service(
 ) -> RetrievalService:
     """Dependency for providing an instance of RetrievalService."""
     return RetrievalService(embedding_service=embedding_service)
+
+
+def get_llm_provider() -> BaseLLMProvider:
+    """Dependency for providing an instance of BaseLLMProvider."""
+    return GeminiProvider()
+
+
+def get_rag_service(
+    retrieval_service: RetrievalService = Depends(get_retrieval_service),
+    llm_provider: BaseLLMProvider = Depends(get_llm_provider),
+) -> RAGService:
+    """Dependency for providing an instance of RAGService."""
+    return RAGService(retrieval_service=retrieval_service, llm_provider=llm_provider)
 
 
 def get_current_user(

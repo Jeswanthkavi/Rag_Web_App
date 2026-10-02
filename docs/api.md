@@ -68,7 +68,35 @@ All endpoints are versioned under `/api/v1` and return standardized JSON respons
 
 ---
 
-## 4. Conversations & Messages (`/api/v1/conversations`)
+## 4. Grounded RAG Generation (`/api/v1/rag`)
+
+| Method | Endpoint | Description | Auth Required |
+|---|---|---|---|
+| `POST` | `/api/v1/rag/query` | Execute grounded RAG answer generation against user's documents | Yes (Bearer JWT) |
+
+### Request Body (`POST /api/v1/rag/query`)
+```json
+{
+  "query": "How is the system deployed?",
+  "top_k": 5,
+  "similarity_threshold": 0.5,
+  "document_id": "optional-document-uuid"
+}
+```
+
+### Response Body (`200 OK`)
+```json
+{
+  "query": "How is the system deployed?",
+  "answer": "Based on the retrieved context, the system uses microservices deployed on Kubernetes with auto-scaling.",
+  "retrieved_context_count": 2,
+  "model_name": "gemini-2.5-flash"
+}
+```
+
+---
+
+## 5. Conversations & Messages (`/api/v1/conversations`) - Phase 14
 
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|---|
@@ -79,16 +107,7 @@ All endpoints are versioned under `/api/v1` and return standardized JSON respons
 
 ---
 
-## 4. Grounded Chat & RAG (`/api/v1/chat`)
-
-| Method | Endpoint | Description | Auth Required |
-|---|---|---|---|
-| `POST` | `/api/v1/chat/query` | Execute grounded RAG query with optional filters & citation metadata | Yes |
-| `POST` | `/api/v1/chat/stream` | Stream grounded RAG generation (Server-Sent Events) | Yes |
-
----
-
-## 5. Health & Observability (`/api/v1/health`)
+## 6. Health & Observability (`/api/v1/health`)
 
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|---|
