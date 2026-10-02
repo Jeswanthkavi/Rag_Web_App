@@ -156,18 +156,28 @@ class EmbeddingSettings(BaseModel):
     normalize_embeddings: bool = Field(default=True, description="Whether to normalize dense embeddings")
 
 
+class QueryRewritingSettings(BaseModel):
+    """Conversational query rewriting configuration."""
+    enable_query_rewriting: bool = Field(default=True, description="Enable query rewriting for conversational follow-ups")
+    query_rewriter_model: str = Field(default="gemini-2.5-flash", description="Model name for query rewriting")
+    query_rewriter_temperature: float = Field(default=0.0, ge=0.0, le=1.0, description="Temperature for query rewriting")
+    query_rewriter_max_history_messages: int = Field(default=5, ge=1, le=20, description="Max history messages for rewriting prompt")
+    query_rewriter_max_query_length: int = Field(default=500, ge=50, le=2000, description="Max length of rewritten query")
+    query_rewriter_timeout: float = Field(default=10.0, gt=0, description="Query rewriting request timeout in seconds")
+
+
 class RetrievalSettings(BaseModel):
     """Text chunking and retrieval parameters."""
     chunk_size: int = Field(default=500, ge=50, le=4000, description="Character chunk target size")
     chunk_overlap: int = Field(default=50, ge=0, le=1000, description="Overlap characters between chunks")
-    retrieval_top_k: int = Field(default=5, ge=1, le=50, description="Number of candidate chunks to retrieve")
+    retrieval_top_k: int = Field(default=20, ge=1, le=100, description="Number of candidate chunks for initial dense retrieval")
     score_threshold: float = Field(default=0.5, ge=0.0, le=1.0, description="Minimum cosine similarity score")
-    enable_reranking: bool = Field(default=False, description="Enable cross-encoder reranking")
+    enable_reranking: bool = Field(default=True, description="Enable cross-encoder reranking")
     reranking_model: str = Field(
         default="cross-encoder/ms-marco-MiniLM-L-6-v2",
         description="Cross-encoder reranking model name"
     )
-    reranking_top_k: int = Field(default=3, ge=1, le=20, description="Final number of top reranked chunks")
+    reranking_top_k: int = Field(default=5, ge=1, le=50, description="Final number of top reranked chunks")
 
     @model_validator(mode="after")
     def validate_chunk_params(self) -> "RetrievalSettings":
@@ -261,14 +271,22 @@ class Settings(BaseSettings):
     embedding_batch_size: int = 32
     normalize_embeddings: bool = True
 
-    # Retrieval
+    # Retrieval & Reranking
     chunk_size: int = 500
     chunk_overlap: int = 50
-    retrieval_top_k: int = 5
+    retrieval_top_k: int = 20
     score_threshold: float = 0.5
-    enable_reranking: bool = False
+    enable_reranking: bool = True
     reranking_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    reranking_top_k: int = 3
+    reranking_top_k: int = 5
+
+    # Query Rewriting
+    enable_query_rewriting: bool = True
+    query_rewriter_model: str = "gemini-2.5-flash"
+    query_rewriter_temperature: float = 0.0
+    query_rewriter_max_history_messages: int = 5
+    query_rewriter_max_query_length: int = 500
+    query_rewriter_timeout: float = 10.0
 
     # Conversation Memory
     max_history_messages: int = 10
@@ -391,6 +409,17 @@ class Settings(BaseSettings):
         )
 
     @property
+    def query_rewriting(self) -> QueryRewritingSettings:
+        return QueryRewritingSettings(
+            enable_query_rewriting=self.enable_query_rewriting,
+            query_rewriter_model=self.query_rewriter_model,
+            query_rewriter_temperature=self.query_rewriter_temperature,
+            query_rewriter_max_history_messages=self.query_rewriter_max_history_messages,
+            query_rewriter_max_query_length=self.query_rewriter_max_query_length,
+            query_rewriter_timeout=self.query_rewriter_timeout,
+        )
+
+    @property
     def conversation(self) -> ConversationSettings:
         return ConversationSettings(
             max_history_messages=self.max_history_messages,
@@ -469,9 +498,21 @@ class Settings(BaseSettings):
             "retrieval": {
                 "chunk_size": self.chunk_size,
                 "chunk_overlap": self.chunk_overlap,
-                "top_k": self.retrieval_top_k,
+                "retrieval_top_k": self.retrieval_top_k,
                 "score_threshold": self.score_threshold,
                 "enable_reranking": self.enable_reranking,
+                "reranking_model": self.reranking_model,
+                "reranking_top_k": self.reranking_top_k,
+            },
+            "query_rewriting": {
+                "enabled": self.enable_query_rewriting,
+                "model": self.query_rewriter_model,
+                "temperature": self.query_rewriter_temperature,
+                "max_history_messages": self.query_rewriter_max_history_messages,
+                "max_query_length": self.query_rewriter_max_query_length,
+            },
+            "conversation": {
+                "max_history_messages": self.max_history_messages,
             },
             "logging": {
                 "log_level": self.log_level,

@@ -77,12 +77,24 @@ def get_document_service(
     return DocumentService(doc_repo=doc_repo, vector_service=vector_service)
 
 
+from backend.app.query_rewriting.service import QueryRewritingService
+from backend.app.reranking.service import RerankingService
 from backend.app.services.conversation_service import ConversationService
 
 
 def get_conversation_service(db: Session = Depends(get_db)) -> ConversationService:
     """Dependency for providing an instance of ConversationService."""
     return ConversationService(db=db)
+
+
+def get_query_rewriting_service() -> QueryRewritingService:
+    """Dependency for providing an instance of QueryRewritingService."""
+    return QueryRewritingService()
+
+
+def get_reranking_service() -> RerankingService:
+    """Dependency for providing an instance of RerankingService."""
+    return RerankingService()
 
 
 def get_retrieval_service(
@@ -101,12 +113,16 @@ def get_rag_service(
     retrieval_service: RetrievalService = Depends(get_retrieval_service),
     llm_provider: BaseLLMProvider = Depends(get_llm_provider),
     conversation_service: ConversationService = Depends(get_conversation_service),
+    query_rewriting_service: QueryRewritingService = Depends(get_query_rewriting_service),
+    reranking_service: RerankingService = Depends(get_reranking_service),
 ) -> RAGService:
     """Dependency for providing an instance of RAGService."""
     return RAGService(
         retrieval_service=retrieval_service,
         llm_provider=llm_provider,
         conversation_service=conversation_service,
+        query_rewriting_service=query_rewriting_service,
+        reranking_service=reranking_service,
     )
 
 

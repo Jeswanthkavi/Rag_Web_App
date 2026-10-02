@@ -103,7 +103,8 @@ All endpoints are versioned under `/api/v1` and return standardized JSON respons
   ],
   "conversation_id": "conv-uuid-1",
   "message_id": "msg-assistant-uuid",
-  "model_name": "gemini-2.5-flash"
+  "model_name": "gemini-2.5-flash",
+  "rewritten_query": "What is the warranty period for the solar battery model X?"
 }
 ```
 

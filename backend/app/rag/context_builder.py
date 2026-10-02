@@ -1,13 +1,14 @@
 """Context construction component for formatting retrieved chunks into structured prompt context."""
 
-from typing import List
+from typing import Any, List, Sequence, Union
+from backend.app.reranking.models import RerankResult
 from backend.app.retrieval.models import RetrievalResult
 
 
 class ContextBuilder:
-    """Formats Phase 11 RetrievalResult objects into deterministic grounded context text."""
+    """Formats RetrievalResult or RerankResult objects into deterministic grounded context text."""
 
-    def build_context(self, results: List[RetrievalResult]) -> str:
+    def build_context(self, results: Sequence[Union[RetrievalResult, RerankResult, Any]]) -> str:
         """Constructs formatted context text with explicit document boundaries.
         
         Preserves metadata (filename, page number, chunk index) for future citation rendering

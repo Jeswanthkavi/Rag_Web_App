@@ -17,9 +17,21 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+import threading
+
+_last_timestamp_ns = 0
+_id_lock = threading.Lock()
+
+
 def generate_time_ordered_id() -> str:
-    """Generates a 36-char time-ordered UUID string ensuring monotonic sorting by insertion time."""
-    t_hex = f"{time.time_ns():016x}"
+    """Generates a 36-char time-ordered UUID string ensuring strictly monotonic sorting by insertion time."""
+    global _last_timestamp_ns
+    with _id_lock:
+        now_ns = time.time_ns()
+        if now_ns <= _last_timestamp_ns:
+            now_ns = _last_timestamp_ns + 1
+        _last_timestamp_ns = now_ns
+    t_hex = f"{now_ns:016x}"
     u_hex = uuid.uuid4().hex
     return f"{t_hex[:8]}-{t_hex[8:12]}-{t_hex[12:16]}-{u_hex[:4]}-{u_hex[4:16]}"
 

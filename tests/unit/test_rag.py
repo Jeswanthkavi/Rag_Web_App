@@ -287,11 +287,11 @@ class TestRAGServiceUnit:
             document_id="d1",
         )
 
-        # Verify retrieval parameters passed correctly
+        # Verify retrieval parameters passed correctly with candidate pool retrieval_top_k
         mock_retrieval.search.assert_called_once_with(
             query="What is the refund period?",
             user_id="user-1",
-            top_k=3,
+            top_k=20,
             similarity_threshold=0.6,
             document_id="d1",
         )

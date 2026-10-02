@@ -28,7 +28,10 @@ class TestConfigDefaults:
         assert settings.embedding_dimension == 384
         assert settings.chunk_size == 500
         assert settings.chunk_overlap == 50
-        assert settings.retrieval_top_k == 5
+        assert settings.retrieval_top_k == 20
+        assert settings.reranking_top_k == 5
+        assert settings.enable_reranking is True
+        assert settings.enable_query_rewriting is True
         assert settings.score_threshold == 0.5
 
     def test_modular_subsection_properties(self):
@@ -42,6 +45,8 @@ class TestConfigDefaults:
         assert isinstance(settings.embedding, EmbeddingSettings)
         assert isinstance(settings.retrieval, RetrievalSettings)
         assert isinstance(settings.logging, LoggingSettings)
+        from backend.app.core.config import QueryRewritingSettings
+        assert isinstance(settings.query_rewriting, QueryRewritingSettings)
 
 
 class TestConfigParsingAndValidation:

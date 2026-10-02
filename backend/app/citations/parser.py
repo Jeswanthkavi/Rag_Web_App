@@ -2,8 +2,9 @@
 
 import re
 import logging
-from typing import List, Set
+from typing import Any, List, Sequence, Set, Union
 from backend.app.citations.models import Citation
+from backend.app.reranking.models import RerankResult
 from backend.app.retrieval.models import RetrievalResult
 
 logger = logging.getLogger("app.citations.parser")
@@ -38,7 +39,7 @@ class CitationParser:
     def parse_and_verify(
         self,
         answer_text: str,
-        retrieved_results: List[RetrievalResult],
+        retrieved_results: Sequence[Union[RetrievalResult, RerankResult, Any]],
     ) -> List[Citation]:
         """Parses citation markers from the answer and verifies them against retrieved context.
         

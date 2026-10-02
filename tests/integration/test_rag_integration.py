@@ -509,3 +509,164 @@ class TestGroundedRAGIntegration:
                 conversation_id=conv_1.id,
             )
 
+    def test_conversational_follow_up_with_query_rewriting_and_reranking(
+        self,
+        db_session: Session,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        """End-to-end integration test: conversation -> rewriting -> dense retrieval -> reranking -> LLM -> citations -> message persistence."""
+        user_1 = indexed_rag_documents["user_1"]
+        from backend.app.query_rewriting.fake_rewriter import FakeQueryRewriter
+        from backend.app.query_rewriting.service import QueryRewritingService
+        from backend.app.reranking.fake_provider import FakeReranker
+        from backend.app.reranking.service import RerankingService
+        from backend.app.services.conversation_service import ConversationService
+
+        conv_service = ConversationService(db=db_session)
+        conv = conv_service.create_conversation(user_id=str(user_1.id), title="Architecture Chat")
+
+        fake_rewriter = FakeQueryRewriter(
+            custom_mappings={
+                "what is the failover mechanism?": "What is the PostgreSQL database failover mechanism?"
+            }
+        )
+        rewriting_service = QueryRewritingService(rewriter=fake_rewriter)
+
+        fake_reranker = FakeReranker(reverse_order=False)
+        reranking_service = RerankingService(reranker=fake_reranker)
+
+        fake_llm = FakeLLMProvider(
+            model_name="gemini-2.5-flash",
+            custom_response="PostgreSQL uses automated replica failover with PgBouncer [Source 1].",
+        )
+
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=fake_llm,
+            conversation_service=conv_service,
+            query_rewriting_service=rewriting_service,
+            reranking_service=reranking_service,
+        )
+
+        # Turn 1: First question
+        resp_1 = rag_service.generate_answer(
+            query="Tell me about the database architecture.",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+        assert resp_1.query == "Tell me about the database architecture."
+        assert resp_1.rewritten_query is None  # Standalone bypass for first turn
+        assert fake_rewriter.call_count == 0
+
+        # Turn 2: Ambiguous follow-up question
+        fake_llm.last_prompt = None
+        resp_2 = rag_service.generate_answer(
+            query="What is the failover mechanism?",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+
+        # 1. Verify original query preserved for user / response
+        assert resp_2.query == "What is the failover mechanism?"
+        # 2. Verify rewritten query was generated and stored
+        assert resp_2.rewritten_query == "What is the PostgreSQL database failover mechanism?"
+        # 3. Verify reranker was invoked
+        assert fake_reranker.call_count >= 1
+        # 4. Verify original user question was sent to LLM prompt
+        assert fake_llm.last_prompt is not None
+        assert "=== USER QUESTION ===" in fake_llm.last_prompt
+        assert "What is the failover mechanism?" in fake_llm.last_prompt
+        # 5. Verify citations and DB messages
+        assert len(resp_2.citations) >= 1
+        messages = conv_service.msg_repo.list_by_conversation(conv.id)
+        assert len(messages) == 4
+        assert messages[2].content == "What is the failover mechanism?"
+
+    def test_query_rewriter_failure_fallback_in_rag(
+        self,
+        db_session: Session,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        """Verify RAG pipeline degrades gracefully when query rewriting provider fails."""
+        user_1 = indexed_rag_documents["user_1"]
+        from backend.app.query_rewriting.fake_rewriter import FakeQueryRewriter
+        from backend.app.query_rewriting.service import QueryRewritingService
+        from backend.app.services.conversation_service import ConversationService
+
+        conv_service = ConversationService(db=db_session)
+        conv = conv_service.create_conversation(user_id=str(user_1.id), title="Fallback Thread")
+
+        fake_rewriter = FakeQueryRewriter(should_fail=True)
+        rewriting_service = QueryRewritingService(rewriter=fake_rewriter)
+
+        fake_llm = FakeLLMProvider(
+            model_name="gemini-2.5-flash",
+            custom_response="The architecture is based on microservices [Source 1].",
+        )
+
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=fake_llm,
+            conversation_service=conv_service,
+            query_rewriting_service=rewriting_service,
+        )
+
+        # First turn
+        rag_service.generate_answer(
+            query="Initial question",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+
+        # Second turn (rewriter will fail, must fall back to original query)
+        resp = rag_service.generate_answer(
+            query="What about microservices?",
+            user_id=str(user_1.id),
+            conversation_id=conv.id,
+            similarity_threshold=0.0,
+        )
+
+        assert resp.query == "What about microservices?"
+        assert resp.answer == "The architecture is based on microservices [Source 1]."
+
+    def test_reranker_failure_fallback_in_rag(
+        self,
+        db_session: Session,
+        retrieval_service: RetrievalService,
+        indexed_rag_documents: dict,
+    ):
+        """Verify RAG pipeline degrades gracefully when reranker provider fails."""
+        user_1 = indexed_rag_documents["user_1"]
+        from backend.app.reranking.fake_provider import FakeReranker
+        from backend.app.reranking.service import RerankingService
+
+        fake_reranker = FakeReranker(should_fail=True)
+        reranking_service = RerankingService(reranker=fake_reranker)
+
+        fake_llm = FakeLLMProvider(
+            model_name="gemini-2.5-flash",
+            custom_response="Kubernetes manages container deployments [Source 1].",
+        )
+
+        rag_service = RAGService(
+            retrieval_service=retrieval_service,
+            llm_provider=fake_llm,
+            reranking_service=reranking_service,
+        )
+
+        resp = rag_service.generate_answer(
+            query="How does deployment work?",
+            user_id=str(user_1.id),
+            similarity_threshold=0.0,
+        )
+
+        assert resp.query == "How does deployment work?"
+        assert resp.answer == "Kubernetes manages container deployments [Source 1]."
+        assert resp.retrieved_context_count >= 1
+
+

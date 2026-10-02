@@ -13,18 +13,26 @@ DEFAULT_NO_CONTEXT_MESSAGE = (
 @dataclass(frozen=True)
 class RAGConfig:
     """Runtime configuration for grounded RAG generation."""
-    top_k: int = 5
+    top_k: int = 5  # default final_top_k
+    retrieval_top_k: int = 20  # candidate pool size for dense retrieval
+    final_top_k: int = 5  # final top-K after reranking
     similarity_threshold: Optional[float] = 0.5
     temperature: float = 0.2
     max_tokens: int = 2048
     max_query_length: int = 1000
     max_history_messages: int = 10
     enable_citations: bool = True
+    enable_query_rewriting: bool = True
+    enable_reranking: bool = True
     no_context_message: str = DEFAULT_NO_CONTEXT_MESSAGE
 
     def __post_init__(self):
         if self.top_k < 1 or self.top_k > 100:
             raise ValueError(f"top_k must be between 1 and 100, got {self.top_k}")
+        if self.retrieval_top_k < 1 or self.retrieval_top_k > 200:
+            raise ValueError(f"retrieval_top_k must be between 1 and 200, got {self.retrieval_top_k}")
+        if self.final_top_k < 1 or self.final_top_k > 100:
+            raise ValueError(f"final_top_k must be between 1 and 100, got {self.final_top_k}")
         if self.similarity_threshold is not None:
             if not (0.0 <= self.similarity_threshold <= 1.0):
                 raise ValueError(
@@ -48,14 +56,27 @@ class RAGConfig:
         cls,
         settings: Optional[Settings] = None,
         top_k: Optional[int] = None,
+        retrieval_top_k: Optional[int] = None,
+        final_top_k: Optional[int] = None,
         similarity_threshold: Optional[float] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         max_history_messages: Optional[int] = None,
+        enable_query_rewriting: Optional[bool] = None,
+        enable_reranking: Optional[bool] = None,
     ) -> "RAGConfig":
         """Builds RAGConfig from application Pydantic settings with optional overrides."""
         s = settings or get_settings()
-        k = top_k if top_k is not None else s.retrieval.retrieval_top_k
+        dense_k = (
+            retrieval_top_k
+            if retrieval_top_k is not None
+            else s.retrieval.retrieval_top_k
+        )
+        fin_k = (
+            final_top_k
+            if final_top_k is not None
+            else (top_k if top_k is not None else s.retrieval.reranking_top_k)
+        )
         thresh = (
             similarity_threshold
             if similarity_threshold is not None
@@ -68,11 +89,25 @@ class RAGConfig:
             if max_history_messages is not None
             else s.conversation.max_history_messages
         )
+        rewriting = (
+            enable_query_rewriting
+            if enable_query_rewriting is not None
+            else s.query_rewriting.enable_query_rewriting
+        )
+        rerank = (
+            enable_reranking
+            if enable_reranking is not None
+            else s.retrieval.enable_reranking
+        )
 
         return cls(
-            top_k=k,
+            top_k=fin_k,
+            retrieval_top_k=dense_k,
+            final_top_k=fin_k,
             similarity_threshold=thresh,
             temperature=temp,
             max_tokens=tokens,
             max_history_messages=history,
+            enable_query_rewriting=rewriting,
+            enable_reranking=rerank,
         )
