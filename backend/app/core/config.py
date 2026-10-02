@@ -204,6 +204,18 @@ class ConversationSettings(BaseModel):
     max_history_messages: int = Field(default=10, ge=1, le=100, description="Maximum number of historical conversation turns to supply as context")
 
 
+class SecuritySettings(BaseModel):
+    """Security hardening, rate limiting, and protection parameters."""
+    rate_limit_enabled: bool = Field(default=True, description="Enable request rate limiting")
+    rate_limit_login: int = Field(default=30, ge=1, le=1000, description="Max login requests per minute")
+    rate_limit_register: int = Field(default=15, ge=1, le=1000, description="Max registration requests per minute")
+    rate_limit_upload: int = Field(default=60, ge=1, le=1000, description="Max document upload requests per minute")
+    rate_limit_rag: int = Field(default=120, ge=1, le=1000, description="Max RAG query requests per minute")
+    rate_limit_general: int = Field(default=600, ge=1, le=5000, description="Max general API requests per minute")
+    max_request_body_bytes: int = Field(default=30 * 1024 * 1024, ge=1024, description="Max request body size in bytes")
+    enable_security_headers: bool = Field(default=True, description="Inject OWASP security response headers")
+
+
 class LoggingSettings(BaseModel):
     """Application logging configuration."""
     log_level: str = Field(default="INFO", description="Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL")
@@ -216,6 +228,7 @@ class LoggingSettings(BaseModel):
         if upper not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError(f"Invalid log_level: {v}")
         return upper
+
 
 
 class Settings(BaseSettings):
@@ -311,9 +324,20 @@ class Settings(BaseSettings):
     # Conversation Memory
     max_history_messages: int = 10
 
+    # Security Hardening (Phase 20)
+    rate_limit_enabled: bool = True
+    rate_limit_login: int = 30
+    rate_limit_register: int = 15
+    rate_limit_upload: int = 60
+    rate_limit_rag: int = 120
+    rate_limit_general: int = 600
+    max_request_body_bytes: int = 30 * 1024 * 1024
+    enable_security_headers: bool = True
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"
+
 
     @field_validator("allowed_origins", mode="before")
     @classmethod
@@ -458,6 +482,19 @@ class Settings(BaseSettings):
         )
 
     @property
+    def security(self) -> SecuritySettings:
+        return SecuritySettings(
+            rate_limit_enabled=self.rate_limit_enabled,
+            rate_limit_login=self.rate_limit_login,
+            rate_limit_register=self.rate_limit_register,
+            rate_limit_upload=self.rate_limit_upload,
+            rate_limit_rag=self.rate_limit_rag,
+            rate_limit_general=self.rate_limit_general,
+            max_request_body_bytes=self.max_request_body_bytes,
+            enable_security_headers=self.enable_security_headers,
+        )
+
+    @property
     def logging(self) -> LoggingSettings:
         return LoggingSettings(
             log_level=self.log_level,
@@ -553,11 +590,22 @@ class Settings(BaseSettings):
             "conversation": {
                 "max_history_messages": self.max_history_messages,
             },
+            "security": {
+                "rate_limit_enabled": self.rate_limit_enabled,
+                "rate_limit_login": self.rate_limit_login,
+                "rate_limit_register": self.rate_limit_register,
+                "rate_limit_upload": self.rate_limit_upload,
+                "rate_limit_rag": self.rate_limit_rag,
+                "rate_limit_general": self.rate_limit_general,
+                "max_request_body_bytes": self.max_request_body_bytes,
+                "enable_security_headers": self.enable_security_headers,
+            },
             "logging": {
                 "log_level": self.log_level,
                 "log_format": self.log_format,
             }
         }
+
 
 
 def validate_startup_config(settings: Settings) -> bool:

@@ -34,12 +34,38 @@ def create_application() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.app.allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+        expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
     )
+
+    # 1. Security Headers Middleware (OWASP protection)
+    if settings.security.enable_security_headers:
+        from backend.app.core.security_middleware import SecurityHeadersMiddleware
+        app.add_middleware(SecurityHeadersMiddleware)
+
+    # 2. Content Length / Payload Bound Middleware (DoS protection)
+    from backend.app.core.security_middleware import ContentLengthLimitMiddleware
+    app.add_middleware(
+        ContentLengthLimitMiddleware,
+        max_bytes=settings.security.max_request_body_bytes,
+    )
+
+    # 3. Sliding-window Rate Limiting Middleware (Brute-force and flood protection)
+    if settings.security.rate_limit_enabled:
+        from backend.app.core.security_middleware import RateLimitMiddleware
+        app.add_middleware(
+            RateLimitMiddleware,
+            login_limit=settings.security.rate_limit_login,
+            register_limit=settings.security.rate_limit_register,
+            upload_limit=settings.security.rate_limit_upload,
+            rag_limit=settings.security.rate_limit_rag,
+            general_limit=settings.security.rate_limit_general,
+        )
 
     # Mount API version 1 router
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)
+
 
     @app.get("/", tags=["Root"])
     def root():
