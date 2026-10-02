@@ -278,8 +278,18 @@ class QdrantVectorRepository:
                 })
             return results
 
+        except UnexpectedResponse as e:
+            if getattr(e, "status_code", None) == 404 or "not found" in str(e).lower():
+                try:
+                    self.initialize_collection(target_collection)
+                    return []
+                except Exception:
+                    pass
+            sanitized = str(e).replace("\\", "/")[:200]
+            logger.error(f"Vector search failed in '{target_collection}' for user '{user_id}': {sanitized}")
+            raise VectorStoreError(f"Vector search failed: {sanitized}") from e
         except Exception as e:
-            sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+            sanitized = str(e).replace("\\", "/")[:200]
             logger.error(
                 f"Vector search failed in '{target_collection}' for user '{user_id}': {sanitized}"
             )

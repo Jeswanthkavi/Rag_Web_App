@@ -100,7 +100,7 @@ class GeminiSettings(BaseModel):
         default=SecretStr(""),
         description="Google Gemini API Key"
     )
-    gemini_model: str = Field(default="gemini-2.5-flash", description="Gemini model identifier")
+    gemini_model: str = Field(default="gemini-3.8-flash", description="Gemini model identifier")
     gemini_temperature: float = Field(default=0.2, ge=0.0, le=2.0, description="Sampling temperature")
     gemini_max_tokens: int = Field(default=2048, ge=64, le=8192, description="Maximum completion tokens")
     gemini_timeout: float = Field(default=30.0, gt=0, description="Gemini API request timeout in seconds")
@@ -159,7 +159,7 @@ class EmbeddingSettings(BaseModel):
 class QueryRewritingSettings(BaseModel):
     """Conversational query rewriting configuration."""
     enable_query_rewriting: bool = Field(default=True, description="Enable query rewriting for conversational follow-ups")
-    query_rewriter_model: str = Field(default="gemini-2.5-flash", description="Model name for query rewriting")
+    query_rewriter_model: str = Field(default="gemini-3.8-flash", description="Model name for query rewriting")
     query_rewriter_temperature: float = Field(default=0.0, ge=0.0, le=1.0, description="Temperature for query rewriting")
     query_rewriter_max_history_messages: int = Field(default=5, ge=1, le=20, description="Max history messages for rewriting prompt")
     query_rewriter_max_query_length: int = Field(default=500, ge=50, le=2000, description="Max length of rewritten query")
@@ -272,7 +272,7 @@ class Settings(BaseSettings):
 
     # Gemini
     gemini_api_key: SecretStr = SecretStr("")
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.8-flash"
     gemini_temperature: float = 0.2
     gemini_max_tokens: int = 2048
     gemini_timeout: float = 30.0

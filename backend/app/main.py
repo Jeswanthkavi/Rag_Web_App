@@ -12,8 +12,13 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan context for startup validation and graceful shutdown."""
-    # Validate required configuration on startup
     validate_startup_config(settings)
+    try:
+        from backend.app.vectorstore.service import VectorStoreService
+        VectorStoreService().initialize_collection()
+    except Exception as e:
+        import logging
+        logging.getLogger("app.main").warning(f"Qdrant collection startup check warning: {e}")
     yield
 
 
