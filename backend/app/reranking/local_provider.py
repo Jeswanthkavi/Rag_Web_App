@@ -1,13 +1,18 @@
 """Local cross-encoder reranker provider using sentence-transformers."""
 
 import logging
-from typing import List, Optional
+import threading
+from typing import Any, Dict, List, Optional
 from backend.app.reranking.base import BaseReranker, RerankerError
 from backend.app.reranking.config import RerankingConfig
 from backend.app.reranking.models import RerankResult
 from backend.app.retrieval.models import RetrievalResult
 
 logger = logging.getLogger("app.reranking.local")
+
+# Process-level model cache to avoid repeated CrossEncoder loading
+_GLOBAL_RERANKER_CACHE: Dict[str, Any] = {}
+_GLOBAL_RERANKER_LOCK = threading.Lock()
 
 
 class LocalReranker(BaseReranker):
@@ -22,17 +27,22 @@ class LocalReranker(BaseReranker):
         return "local"
 
     def _get_model(self):
-        """Lazily loads and caches the CrossEncoder model."""
-        if self._model is None:
-            try:
-                from sentence_transformers import CrossEncoder
-                logger.info(f"Loading local cross-encoder model: {self.config.model_name}")
-                self._model = CrossEncoder(self.config.model_name)
-            except Exception as e:
-                sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
-                logger.error(f"Failed to load cross-encoder model '{self.config.model_name}': {sanitized}")
-                raise RerankerError(f"Failed to load reranker model '{self.config.model_name}': {sanitized}") from e
-        return self._model
+        """Lazily loads and caches the CrossEncoder model globally."""
+        if self._model is not None:
+            return self._model
+        model_name = self.config.model_name
+        with _GLOBAL_RERANKER_LOCK:
+            if model_name not in _GLOBAL_RERANKER_CACHE:
+                try:
+                    from sentence_transformers import CrossEncoder
+                    logger.info(f"Loading local cross-encoder model: {model_name}")
+                    _GLOBAL_RERANKER_CACHE[model_name] = CrossEncoder(model_name)
+                except Exception as e:
+                    sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+                    logger.error(f"Failed to load cross-encoder model '{model_name}': {sanitized}")
+                    raise RerankerError(f"Failed to load reranker model '{model_name}': {sanitized}") from e
+            self._model = _GLOBAL_RERANKER_CACHE[model_name]
+            return self._model
 
     def rerank(
         self,

@@ -1,0 +1,114 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: advanced_rag_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-advanced_rag}
+      MYSQL_USER: ${MYSQL_USER:-rag_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-rag_password}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${MYSQL_ROOT_PASSWORD:-root_password} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - rag_network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: advanced_rag_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag_network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: advanced_rag_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: "Advanced-RAG-Platform"
+      APP_ENV: "production"
+      DEBUG: "False"
+      API_V1_PREFIX: "/api/v1"
+      DATABASE_URL: "mysql+pymysql://${MYSQL_USER:-rag_user}:${MYSQL_PASSWORD:-rag_password}@mysql:3306/${MYSQL_DATABASE:-advanced_rag}"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_COLLECTION_NAME: "rag_document_chunks"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GEMINI_MODEL: "${GEMINI_MODEL:-gemini-2.5-flash}"
+      SECRET_KEY: "${SECRET_KEY:-prod-secret-key-replace-me-12345678}"
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:-prod-jwt-secret-replace-me-87654321}"
+      ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      UPLOAD_STORAGE_DIR: "/app/storage/uploads"
+    volumes:
+      - uploaded_docs:/app/storage/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - rag_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: advanced_rag_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8000/api/v1"
+      NODE_ENV: "production"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - rag_network
+
+volumes:
+  mysql_data:
+    name: advanced_rag_mysql_data
+  qdrant_storage:
+    name: advanced_rag_qdrant_storage
+  uploaded_docs:
+    name: advanced_rag_uploaded_docs
+
+networks:
+  rag_network:
+    name: advanced_rag_network
+    driver: bridge

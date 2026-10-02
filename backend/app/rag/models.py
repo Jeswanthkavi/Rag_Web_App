@@ -38,3 +38,4 @@ class RAGResponse(BaseModel):
     message_id: Optional[str] = Field(default=None, description="Unique ID of the generated assistant message record")
     model_name: Optional[str] = Field(default=None, description="LLM model identifier used for generation")
     rewritten_query: Optional[str] = Field(default=None, description="The standalone rewritten query used for vector retrieval if rewritten")
+    latency_metrics: Optional[Dict[str, float]] = Field(default=None, description="Granular monotonic execution latency breakdown in milliseconds")

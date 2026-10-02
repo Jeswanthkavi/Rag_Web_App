@@ -75,19 +75,29 @@ class SQLLexicalRetriever(BaseLexicalRetriever):
             if not rows:
                 return []
 
-            # 2. Tokenize corpus chunks
-            chunks = []
-            tokenized_corpus = []
-            for chunk_obj, filename, file_type in rows:
-                chunks.append((chunk_obj, filename, file_type))
-                tokenized_corpus.append(tokenize(chunk_obj.chunk_text))
+            # 2. Check tenant-isolated BM25 cache
+            fingerprint = (len(rows), rows[0][0].id if rows else None, rows[-1][0].id if rows else None)
+            from backend.app.hybrid_retrieval.cache import get_bm25_cache
+            cache = get_bm25_cache()
+            cached = cache.get(clean_user_id, clean_doc_id, fingerprint)
+
+            if cached is not None:
+                bm25, chunks = cached
+            else:
+                chunks = []
+                tokenized_corpus = []
+                for chunk_obj, filename, file_type in rows:
+                    chunks.append((chunk_obj, filename, file_type))
+                    tokenized_corpus.append(tokenize(chunk_obj.chunk_text))
+
+                bm25 = BM25Okapi(
+                    corpus=tokenized_corpus,
+                    k1=self.config.bm25_k1,
+                    b=self.config.bm25_b,
+                )
+                cache.put(clean_user_id, clean_doc_id, fingerprint, bm25, chunks)
 
             # 3. Score corpus using BM25
-            bm25 = BM25Okapi(
-                corpus=tokenized_corpus,
-                k1=self.config.bm25_k1,
-                b=self.config.bm25_b,
-            )
             scores = bm25.get_scores(query_tokens)
 
             # 4. Pair chunks with non-zero scores

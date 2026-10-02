@@ -111,7 +111,11 @@ class RAGService:
         clean_doc_id = document_id.strip() if document_id and document_id.strip() else None
         clean_conv_id = conversation_id.strip() if conversation_id and conversation_id.strip() else None
 
+        total_start = time.perf_counter()
+        latencies: dict = {}
+
         # 2. Conversation Memory Integration (if conversation_id provided)
+        t0 = time.perf_counter()
         conversation_history_text: Optional[str] = None
         if clean_conv_id:
             if not self.conversation_service:
@@ -131,13 +135,16 @@ class RAGService:
                 )
             except ConversationNotFoundError as e:
                 raise RAGValidationError(str(e)) from e
+        latencies["memory_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # 3. Conversational Query Rewriting
+        t0 = time.perf_counter()
         rewritten_info = self.query_rewriting_service.rewrite_query(
             query=sanitized_query,
             conversation_history=conversation_history_text,
         )
         retrieval_query = rewritten_info.retrieval_query or sanitized_query
+        latencies["query_rewriting_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # 4. Candidate Retrieval (Hybrid Dense + Lexical Fusion or Dense Only)
         dense_top_k = self.config.retrieval_top_k
@@ -163,6 +170,7 @@ class RAGService:
                     document_id=clean_doc_id,
                 )
             retrieval_duration = time.perf_counter() - start_retrieval
+            latencies["retrieval_ms"] = round(retrieval_duration * 1000, 2)
             logger.info(
                 f"Retrieved {len(retrieval_response.results)} candidates in {retrieval_duration:.3f}s for user '{clean_user_id}' (query: '{retrieval_query[:40]}...')"
             )
@@ -192,6 +200,7 @@ class RAGService:
                 )
                 assistant_msg_id = assistant_msg.id
 
+            latencies["total_rag_ms"] = round((time.perf_counter() - total_start) * 1000, 2)
             return RAGResponse(
                 query=sanitized_query,
                 answer=self.config.no_context_message,
@@ -201,9 +210,11 @@ class RAGService:
                 message_id=assistant_msg_id,
                 model_name=model_name,
                 rewritten_query=retrieval_query if rewritten_info.was_rewritten else None,
+                latency_metrics=latencies,
             )
 
         # 6. Candidate Reranking
+        t0 = time.perf_counter()
         final_top_k = top_k if top_k is not None else self.config.final_top_k
         reranked_results = self.reranking_service.rerank(
             query=retrieval_query,
@@ -216,9 +227,12 @@ class RAGService:
             reranked_results = [
                 c for c in retrieval_response.results[:final_top_k]
             ]
+        latencies["reranking_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # 7. Context Assembly
+        t0 = time.perf_counter()
         formatted_context = self.context_builder.build_context(reranked_results)
+        latencies["context_building_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
         # 8. Prompt Construction (User's original question is answered)
         user_prompt = self.prompt_builder.build_user_prompt(
@@ -237,6 +251,7 @@ class RAGService:
                 max_tokens=self.config.max_tokens,
             )
             llm_duration = time.perf_counter() - start_llm
+            latencies["generation_ms"] = round(llm_duration * 1000, 2)
             logger.info(
                 f"LLM generation succeeded in {llm_duration:.3f}s (model={llm_response.model_name}, chunks={len(reranked_results)})"
             )
@@ -247,12 +262,14 @@ class RAGService:
                 answer_text = self.config.no_context_message
 
             # 10. Citation Extraction & Verification
+            t0 = time.perf_counter()
             citations: List[Citation] = []
             if self.config.enable_citations and answer_text != self.config.no_context_message:
                 citations = self.citation_parser.parse_and_verify(
                     answer_text=answer_text,
                     retrieved_results=reranked_results,
                 )
+            latencies["citations_ms"] = round((time.perf_counter() - t0) * 1000, 2)
 
             # 11. Record Assistant Message in Conversation History
             assistant_msg_id: Optional[str] = None
@@ -271,6 +288,7 @@ class RAGService:
                 )
                 assistant_msg_id = assistant_msg.id
 
+            latencies["total_rag_ms"] = round((time.perf_counter() - total_start) * 1000, 2)
             return RAGResponse(
                 query=sanitized_query,
                 answer=answer_text,
@@ -280,6 +298,7 @@ class RAGService:
                 message_id=assistant_msg_id,
                 model_name=llm_response.model_name,
                 rewritten_query=retrieval_query if rewritten_info.was_rewritten else None,
+                latency_metrics=latencies,
             )
 
         except LLMProviderError as e:

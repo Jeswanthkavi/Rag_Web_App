@@ -111,6 +111,11 @@ class IngestionService:
             document.error_message = None
             db.commit()
             db.refresh(document)
+
+            # Invalidate tenant BM25 cache
+            from backend.app.hybrid_retrieval.cache import get_bm25_cache
+            get_bm25_cache().invalidate_user(user_id=str(user_id))
+
             logger.info(
                 f"Ingestion successful: Document {document_id} marked COMPLETED "
                 f"(pages: {document.page_count}, chunks: {document.total_chunks})"

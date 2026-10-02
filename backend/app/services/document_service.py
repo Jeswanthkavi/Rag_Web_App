@@ -158,6 +158,10 @@ class DocumentService:
 
         # 2. Remove database record (cascades to MySQL document_chunks)
         self.doc_repo.delete(doc)
+
+        # Invalidate tenant BM25 cache
+        from backend.app.hybrid_retrieval.cache import get_bm25_cache
+        get_bm25_cache().invalidate_user(user_id=str(user.id))
         
         # 3. Clean up filesystem storage directory safely
         storage_path = Path(doc.storage_path)

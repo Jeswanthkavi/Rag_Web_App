@@ -1,11 +1,16 @@
 """Local embedding provider using SentenceTransformers."""
 
 import logging
-from typing import List, Optional
+import threading
+from typing import Any, Dict, List, Optional
 from backend.app.embeddings.base import BaseEmbeddingProvider, EmbeddingProviderError
 from backend.app.embeddings.config import EmbeddingConfig
 
 logger = logging.getLogger("app.embeddings.local")
+
+# Process-level model cache to avoid repeated model loading
+_GLOBAL_EMBEDDING_CACHE: Dict[str, Any] = {}
+_GLOBAL_EMBEDDING_LOCK = threading.Lock()
 
 
 class LocalEmbeddingProvider(BaseEmbeddingProvider):
@@ -28,19 +33,24 @@ class LocalEmbeddingProvider(BaseEmbeddingProvider):
         return self.config.dimension
 
     def _get_model(self):
-        """Lazily loads and caches the SentenceTransformer model instance."""
-        if self._model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-                logger.info(f"Loading local embedding model: {self.config.model_name}")
-                self._model = SentenceTransformer(self.config.model_name)
-            except Exception as e:
-                sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
-                logger.error(f"Failed to load embedding model '{self.config.model_name}': {sanitized}")
-                raise EmbeddingProviderError(
-                    f"Failed to load embedding model '{self.config.model_name}': {sanitized}"
-                ) from e
-        return self._model
+        """Lazily loads and caches the SentenceTransformer model instance globally."""
+        if self._model is not None:
+            return self._model
+        model_name = self.config.model_name
+        with _GLOBAL_EMBEDDING_LOCK:
+            if model_name not in _GLOBAL_EMBEDDING_CACHE:
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    logger.info(f"Loading local embedding model: {model_name}")
+                    _GLOBAL_EMBEDDING_CACHE[model_name] = SentenceTransformer(model_name)
+                except Exception as e:
+                    sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+                    logger.error(f"Failed to load embedding model '{model_name}': {sanitized}")
+                    raise EmbeddingProviderError(
+                        f"Failed to load embedding model '{model_name}': {sanitized}"
+                    ) from e
+            self._model = _GLOBAL_EMBEDDING_CACHE[model_name]
+            return self._model
 
     def embed_text(self, text: str) -> List[float]:
         """Generates a dense vector embedding for a single text."""

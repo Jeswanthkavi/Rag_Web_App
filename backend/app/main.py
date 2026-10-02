@@ -1,7 +1,7 @@
 """FastAPI Application entry point for Advanced RAG Platform."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import get_settings, validate_startup_config
 from backend.app.api.v1 import api_router
@@ -63,9 +63,21 @@ def create_application() -> FastAPI:
             general_limit=settings.security.rate_limit_general,
         )
 
+    # 4. Structured Logging & Request Correlation Middleware
+    from backend.app.core.logging_middleware import StructuredLoggingMiddleware
+    app.add_middleware(StructuredLoggingMiddleware)
+
     # Mount API version 1 router
     app.include_router(api_router, prefix=settings.app.api_v1_prefix)
 
+    @app.get("/health", tags=["Health"])
+    def root_health():
+        return {"status": "healthy", "service": settings.app.app_name}
+
+    @app.get("/ready", tags=["Health"])
+    def root_ready(response: Response):
+        from backend.app.api.v1.health import readiness_check
+        return readiness_check(response=response)
 
     @app.get("/", tags=["Root"])
     def root():
