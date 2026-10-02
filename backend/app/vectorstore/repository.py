@@ -156,6 +156,81 @@ class QdrantVectorRepository:
             logger.error(f"Failed to retrieve point '{point_id}': {sanitized}")
             raise VectorStoreError(f"Point retrieval failed: {sanitized}") from e
 
+    def get_document_point_ids(
+        self,
+        document_id: str,
+        user_id: str,
+        collection_name: Optional[str] = None,
+    ) -> List[str]:
+        """Retrieves all existing Qdrant point IDs associated with a specific document and user."""
+        target_collection = self._resolve_collection(collection_name)
+
+        tenant_filter = rest_models.Filter(
+            must=[
+                rest_models.FieldCondition(
+                    key="document_id",
+                    match=rest_models.MatchValue(value=document_id),
+                ),
+                rest_models.FieldCondition(
+                    key="user_id",
+                    match=rest_models.MatchValue(value=user_id),
+                ),
+            ]
+        )
+
+        point_ids: List[str] = []
+        offset = None
+
+        try:
+            while True:
+                scroll_result, next_offset = self.client.scroll(
+                    collection_name=target_collection,
+                    scroll_filter=tenant_filter,
+                    limit=1000,
+                    with_payload=False,
+                    with_vectors=False,
+                    offset=offset,
+                )
+                for record in scroll_result:
+                    point_ids.append(str(record.id))
+
+                if next_offset is None:
+                    break
+                offset = next_offset
+
+            return point_ids
+        except Exception as e:
+            sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+            logger.error(
+                f"Failed to fetch point IDs for document '{document_id}': {sanitized}"
+            )
+            raise VectorStoreError(f"Failed to query document point IDs: {sanitized}") from e
+
+    def delete_points(
+        self,
+        point_ids: List[str],
+        collection_name: Optional[str] = None,
+    ) -> int:
+        """Deletes a specific list of point IDs from the collection."""
+        if not point_ids:
+            return 0
+
+        target_collection = self._resolve_collection(collection_name)
+        try:
+            self.client.delete(
+                collection_name=target_collection,
+                points_selector=rest_models.PointIdsList(points=point_ids),
+                wait=True,
+            )
+            logger.info(
+                f"Deleted {len(point_ids)} specific points from '{target_collection}'"
+            )
+            return len(point_ids)
+        except Exception as e:
+            sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+            logger.error(f"Failed to delete points from '{target_collection}': {sanitized}")
+            raise VectorStoreError(f"Point deletion failed: {sanitized}") from e
+
     def delete_by_document(
         self,
         document_id: str,

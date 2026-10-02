@@ -200,11 +200,12 @@ class TestLocalEmbeddingProviderUnit:
         provider = LocalEmbeddingProvider(config=cfg)
         assert provider._model is None
 
-        # Mock sentence_transformers module
+        mock_st_module = MagicMock()
         mock_model = MagicMock()
         mock_model.encode.return_value = [[0.1, 0.2, 0.3, 0.4]]
+        mock_st_module.SentenceTransformer.return_value = mock_model
 
-        with patch("sentence_transformers.SentenceTransformer", return_value=mock_model):
+        with patch.dict("sys.modules", {"sentence_transformers": mock_st_module}):
             vec = provider.embed_text("Sample input text")
             assert len(vec) == 4
             assert provider._model is not None
@@ -213,6 +214,9 @@ class TestLocalEmbeddingProviderUnit:
         cfg = EmbeddingConfig(model_name="nonexistent-model-12345")
         provider = LocalEmbeddingProvider(config=cfg)
 
-        with patch("sentence_transformers.SentenceTransformer", side_effect=RuntimeError("Download Failed")):
+        mock_st_module = MagicMock()
+        mock_st_module.SentenceTransformer.side_effect = RuntimeError("Download Failed")
+
+        with patch.dict("sys.modules", {"sentence_transformers": mock_st_module}):
             with pytest.raises(EmbeddingProviderError, match="Failed to load embedding model"):
                 provider.embed_text("Test")

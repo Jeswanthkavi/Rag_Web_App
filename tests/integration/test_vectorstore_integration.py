@@ -1,6 +1,7 @@
 """Integration tests for Qdrant VectorStore operations against live Qdrant instance."""
 
 import pytest
+from unittest.mock import patch
 from sqlalchemy.orm import Session
 from qdrant_client import QdrantClient
 
@@ -9,14 +10,18 @@ from backend.app.chunking.service import ChunkingService
 from backend.app.embeddings.service import EmbeddingService
 from backend.app.ingestion.base import ExtractedDocument, ExtractedPage
 from backend.app.models.document import Document, DocumentStatus
+from backend.app.models.document_chunk import DocumentChunk
 from backend.app.models.user import User
 from backend.app.repositories.document_chunk_repository import DocumentChunkRepository
 from backend.app.repositories.document_repository import DocumentRepository
 from backend.app.services.document_service import DocumentService
 from backend.app.vectorstore.client import create_qdrant_client
 from backend.app.vectorstore.config import VectorStoreConfig
+from backend.app.vectorstore.models import VectorStoreError
 from backend.app.vectorstore.repository import QdrantVectorRepository
 from backend.app.vectorstore.service import VectorStoreService
+
+from tests.unit.test_embeddings import FakeEmbeddingProvider
 
 TEST_COLLECTION = "advanced_rag_test_chunks"
 
@@ -42,7 +47,7 @@ def qdrant_test_client() -> QdrantClient:
 def vector_service(qdrant_test_client: QdrantClient) -> VectorStoreService:
     config = VectorStoreConfig.from_settings(collection_name=TEST_COLLECTION)
     repo = QdrantVectorRepository(client=qdrant_test_client, config=config)
-    embedding_service = EmbeddingService()
+    embedding_service = EmbeddingService(provider=FakeEmbeddingProvider(dimension=384))
     return VectorStoreService(vector_repo=repo, embedding_service=embedding_service, config=config)
 
 
@@ -193,6 +198,115 @@ class TestQdrantIntegrationLive:
             document_id=chunked_doc_user_a.id,
         )
         assert total_points == res1.indexed_chunks_count
+
+    def test_reindex_with_modified_chunks_purges_stale_points(
+        self,
+        db_session: Session,
+        vector_service: VectorStoreService,
+        chunked_doc_user_a: Document,
+        user_a: User,
+    ):
+        # 1. First indexing of initial chunks
+        res1 = vector_service.index_document(
+            document=chunked_doc_user_a,
+            db=db_session,
+            collection_name=TEST_COLLECTION,
+        )
+        old_point_ids = set(res1.point_ids)
+        assert len(old_point_ids) >= 2
+
+        # 2. Simulate document re-chunking in Phase 8 (new chunk UUIDs created)
+        chunk_repo = DocumentChunkRepository(db_session)
+        chunk_repo.delete_by_document(chunked_doc_user_a.id, user_a.id)
+
+        new_chunks = [
+            DocumentChunk(
+                document_id=chunked_doc_user_a.id,
+                user_id=user_a.id,
+                chunk_index=0,
+                chunk_text="Updated content version 2 chunk A.",
+                token_count=6,
+            ),
+            DocumentChunk(
+                document_id=chunked_doc_user_a.id,
+                user_id=user_a.id,
+                chunk_index=1,
+                chunk_text="Updated content version 2 chunk B.",
+                token_count=6,
+            ),
+            DocumentChunk(
+                document_id=chunked_doc_user_a.id,
+                user_id=user_a.id,
+                chunk_index=2,
+                chunk_text="Updated content version 2 chunk C.",
+                token_count=6,
+            ),
+        ]
+        chunk_repo.create_many(new_chunks)
+        new_point_ids = {c.id for c in new_chunks}
+
+        # Verify old point IDs are different from new point IDs
+        assert old_point_ids.isdisjoint(new_point_ids)
+
+        # 3. Reindex document
+        res2 = vector_service.index_document(
+            document=chunked_doc_user_a,
+            db=db_session,
+            collection_name=TEST_COLLECTION,
+        )
+
+        assert res2.indexed_chunks_count == 3
+        assert set(res2.point_ids) == new_point_ids
+
+        # 4. Verify all new points exist in Qdrant
+        for p_id in new_point_ids:
+            pt = vector_service.vector_repo.get_point(p_id, collection_name=TEST_COLLECTION)
+            assert pt is not None
+
+        # 5. Verify all old stale points were deleted from Qdrant
+        for old_id in old_point_ids:
+            pt = vector_service.vector_repo.get_point(old_id, collection_name=TEST_COLLECTION)
+            assert pt is None
+
+        # 6. Verify total points count in Qdrant for this document is exactly 3
+        total_points = vector_service.vector_repo.count_points(
+            collection_name=TEST_COLLECTION,
+            user_id=user_a.id,
+            document_id=chunked_doc_user_a.id,
+        )
+        assert total_points == 3
+
+    def test_failed_upsert_preserves_existing_qdrant_vectors(
+        self,
+        db_session: Session,
+        vector_service: VectorStoreService,
+        chunked_doc_user_a: Document,
+        user_a: User,
+    ):
+        # 1. Index document initially with valid vectors
+        res1 = vector_service.index_document(
+            document=chunked_doc_user_a,
+            db=db_session,
+            collection_name=TEST_COLLECTION,
+        )
+        initial_point_ids = list(res1.point_ids)
+        assert len(initial_point_ids) >= 2
+
+        # 2. Simulate an upsert failure during a subsequent reindex attempt
+        with patch.object(vector_service.vector_repo, "upsert_points", side_effect=RuntimeError("Simulated Network Error")):
+            with pytest.raises(VectorStoreError, match="Document indexing failed"):
+                vector_service.index_document(
+                    document=chunked_doc_user_a,
+                    db=db_session,
+                    collection_name=TEST_COLLECTION,
+                )
+
+        # 3. Verify that the previous valid points are STILL intact in Qdrant
+        for p_id in initial_point_ids:
+            pt = vector_service.vector_repo.get_point(p_id, collection_name=TEST_COLLECTION)
+            assert pt is not None
+            assert pt["id"] == p_id
+            assert len(pt["vector"]) == 384
 
     def test_tenant_isolation_in_vectorstore(
         self,

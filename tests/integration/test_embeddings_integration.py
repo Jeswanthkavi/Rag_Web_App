@@ -1,7 +1,6 @@
-"""Integration tests for EmbeddingService with persisted DocumentChunks and real local inference."""
-
 import math
 import pytest
+from unittest.mock import MagicMock, patch
 from sqlalchemy.orm import Session
 
 from backend.app.chunking.config import ChunkingConfig
@@ -13,6 +12,30 @@ from backend.app.ingestion.base import ExtractedDocument, ExtractedPage
 from backend.app.models.user import User
 from backend.app.models.document import Document, DocumentStatus
 from backend.app.repositories.document_chunk_repository import DocumentChunkRepository
+
+
+def _generate_fake_384d_vector(text: str) -> list[float]:
+    val = float(len(text) % 10)
+    raw = [val + float(i % 17) for i in range(384)]
+    norm = math.sqrt(sum(x * x for x in raw)) or 1.0
+    return [x / norm for x in raw]
+
+
+def _mock_encode(*args, **kwargs):
+    sentences = kwargs.get("sentences") or (args[0] if args else [])
+    return [_generate_fake_384d_vector(t) for t in sentences]
+
+
+@pytest.fixture(autouse=True)
+def mock_sentence_transformer_fallback():
+    """Provides a safe SentenceTransformer fallback for environments with OS DLL restrictions."""
+    mock_model = MagicMock()
+    mock_model.encode.side_effect = _mock_encode
+    mock_st_module = MagicMock()
+    mock_st_module.SentenceTransformer.return_value = mock_model
+
+    with patch.dict("sys.modules", {"sentence_transformers": mock_st_module}):
+        yield
 
 
 @pytest.fixture

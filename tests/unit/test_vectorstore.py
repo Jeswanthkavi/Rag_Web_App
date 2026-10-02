@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from typing import List
 
 from qdrant_client.http import models as rest_models
-from backend.app.embeddings.base import BaseEmbeddingProvider
+from backend.app.embeddings.base import BaseEmbeddingProvider, EmbeddingProviderError
 from backend.app.embeddings.service import EmbeddingService
 from backend.app.models.document import Document, DocumentStatus
 from backend.app.models.document_chunk import DocumentChunk
@@ -126,8 +126,27 @@ class TestQdrantVectorRepositoryUnit:
 
         upserted = repo.upsert_points(points, collection_name="test_col")
         assert upserted == 3
-        # 3 points with batch_size=2 should call upsert twice
         assert mock_client.upsert.call_count == 2
+
+    def test_get_document_point_ids_scrolling(self):
+        mock_client = MagicMock()
+        rec1 = MagicMock(id="p-1")
+        rec2 = MagicMock(id="p-2")
+        mock_client.scroll.return_value = ([rec1, rec2], None)
+
+        repo = QdrantVectorRepository(client=mock_client)
+        point_ids = repo.get_document_point_ids("doc-1", "user-1", "test_col")
+
+        assert point_ids == ["p-1", "p-2"]
+        mock_client.scroll.assert_called_once()
+
+    def test_delete_points_by_ids(self):
+        mock_client = MagicMock()
+        repo = QdrantVectorRepository(client=mock_client)
+
+        res = repo.delete_points(["p-1", "p-2"], "test_col")
+        assert res == 2
+        mock_client.delete.assert_called_once()
 
     def test_delete_by_document_tenant_filter(self):
         mock_client = MagicMock()
@@ -142,7 +161,7 @@ class TestQdrantVectorRepositoryUnit:
 
 
 class TestVectorStoreServiceUnit:
-    """Unit tests for VectorStoreService orchestration."""
+    """Unit tests for VectorStoreService orchestration and consistency."""
 
     def test_index_document_empty_chunks(self):
         mock_repo = MagicMock()
@@ -169,6 +188,7 @@ class TestVectorStoreServiceUnit:
 
     def test_index_document_success_syncs_mysql(self):
         mock_repo = MagicMock()
+        mock_repo.get_document_point_ids.return_value = []
         mock_repo.upsert_points.return_value = 2
         mock_db = MagicMock()
 
@@ -195,3 +215,101 @@ class TestVectorStoreServiceUnit:
             assert chunks[0].qdrant_point_id == "c1-uuid"
             assert chunks[1].qdrant_point_id == "c2-uuid"
             mock_db.commit.assert_called_once()
+            # Since no existing points, delete_points should not be called
+            mock_repo.delete_points.assert_not_called()
+
+    def test_index_document_stale_point_cleanup(self):
+        """Verifies that only stale old point IDs are deleted after new points are upserted."""
+        mock_repo = MagicMock()
+        # Suppose Qdrant previously had points ['stale-1', 'stale-2', 'c1-uuid']
+        mock_repo.get_document_point_ids.return_value = ["stale-1", "stale-2", "c1-uuid"]
+        mock_repo.upsert_points.return_value = 2
+        mock_db = MagicMock()
+
+        service = VectorStoreService(
+            vector_repo=mock_repo,
+            embedding_service=EmbeddingService(provider=MockEmbeddingProvider()),
+        )
+
+        doc = Document(id="doc-1", user_id="user-1", filename="sample.pdf", file_type=".pdf", file_size_bytes=100, storage_path="")
+        # Current chunks: 'c1-uuid' and 'c2-uuid'
+        chunks = [
+            DocumentChunk(id="c1-uuid", document_id="doc-1", user_id="user-1", chunk_index=0, chunk_text="Chunk 0", token_count=2),
+            DocumentChunk(id="c2-uuid", document_id="doc-1", user_id="user-1", chunk_index=1, chunk_text="Chunk 1", token_count=2),
+        ]
+
+        with patch("backend.app.vectorstore.service.DocumentChunkRepository") as mock_chunk_repo_cls:
+            mock_chunk_repo = MagicMock()
+            mock_chunk_repo.get_by_document.return_value = chunks
+            mock_chunk_repo_cls.return_value = mock_chunk_repo
+
+            result = service.index_document(document=doc, db=mock_db)
+
+            # Check that current points were upserted
+            assert mock_repo.upsert_points.called
+            # Check that ONLY stale-1 and stale-2 were deleted (not c1-uuid or c2-uuid)
+            mock_repo.delete_points.assert_called_once()
+            deleted_ids = mock_repo.delete_points.call_args[1]["point_ids"]
+            assert set(deleted_ids) == {"stale-1", "stale-2"}
+            assert "c1-uuid" not in deleted_ids
+            assert "c2-uuid" not in deleted_ids
+
+    def test_index_document_upsert_failure_preserves_existing_vectors(self):
+        """Verifies that an upsert failure rolls back DB and does NOT delete any existing vectors."""
+        mock_repo = MagicMock()
+        mock_repo.get_document_point_ids.return_value = ["existing-1", "existing-2"]
+        mock_repo.upsert_points.side_effect = RuntimeError("Qdrant Disk Full")
+        mock_db = MagicMock()
+
+        service = VectorStoreService(
+            vector_repo=mock_repo,
+            embedding_service=EmbeddingService(provider=MockEmbeddingProvider()),
+        )
+
+        doc = Document(id="doc-1", user_id="user-1", filename="sample.pdf", file_type=".pdf", file_size_bytes=100, storage_path="")
+        chunks = [
+            DocumentChunk(id="c1-uuid", document_id="doc-1", user_id="user-1", chunk_index=0, chunk_text="Chunk 0", token_count=2),
+        ]
+
+        with patch("backend.app.vectorstore.service.DocumentChunkRepository") as mock_chunk_repo_cls:
+            mock_chunk_repo = MagicMock()
+            mock_chunk_repo.get_by_document.return_value = chunks
+            mock_chunk_repo_cls.return_value = mock_chunk_repo
+
+            with pytest.raises(VectorStoreError, match="Document indexing failed"):
+                service.index_document(document=doc, db=mock_db)
+
+            # Invariant: delete_points and delete_by_document must NOT have been called!
+            mock_repo.delete_points.assert_not_called()
+            mock_repo.delete_by_document.assert_not_called()
+            mock_db.rollback.assert_called_once()
+
+    def test_index_document_embedding_failure(self):
+        """Verifies that an embedding generation failure aborts before any Qdrant write."""
+        mock_repo = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.dimension = 4
+        mock_embedding.embed_chunks.side_effect = EmbeddingProviderError("Model Timeout")
+        mock_db = MagicMock()
+
+        service = VectorStoreService(
+            vector_repo=mock_repo,
+            embedding_service=mock_embedding,
+        )
+
+        doc = Document(id="doc-1", user_id="user-1", filename="sample.pdf", file_type=".pdf", file_size_bytes=100, storage_path="")
+        chunks = [
+            DocumentChunk(id="c1-uuid", document_id="doc-1", user_id="user-1", chunk_index=0, chunk_text="Chunk 0", token_count=2),
+        ]
+
+        with patch("backend.app.vectorstore.service.DocumentChunkRepository") as mock_chunk_repo_cls:
+            mock_chunk_repo = MagicMock()
+            mock_chunk_repo.get_by_document.return_value = chunks
+            mock_chunk_repo_cls.return_value = mock_chunk_repo
+
+            with pytest.raises(VectorStoreError, match="Document indexing failed"):
+                service.index_document(document=doc, db=mock_db)
+
+            mock_repo.upsert_points.assert_not_called()
+            mock_repo.delete_points.assert_not_called()
+            mock_db.rollback.assert_called_once()
