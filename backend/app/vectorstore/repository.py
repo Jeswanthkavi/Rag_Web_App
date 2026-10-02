@@ -206,6 +206,85 @@ class QdrantVectorRepository:
             )
             raise VectorStoreError(f"Failed to query document point IDs: {sanitized}") from e
 
+    def search(
+        self,
+        query_vector: List[float],
+        user_id: str,
+        document_id: Optional[str] = None,
+        top_k: int = 5,
+        score_threshold: Optional[float] = None,
+        collection_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Executes a tenant-isolated semantic vector search against Qdrant.
+        
+        Guarantees strict tenant isolation by applying a mandatory filter on user_id.
+        Optionally scopes to a specific document_id.
+        """
+        if not user_id or not user_id.strip():
+            raise ValueError("user_id is required for tenant-isolated vector search.")
+        if not query_vector:
+            raise ValueError("query_vector cannot be empty.")
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1.")
+
+        target_collection = self._resolve_collection(collection_name)
+
+        must_conditions: List[rest_models.Condition] = [
+            rest_models.FieldCondition(
+                key="user_id",
+                match=rest_models.MatchValue(value=user_id.strip()),
+            )
+        ]
+        if document_id and document_id.strip():
+            must_conditions.append(
+                rest_models.FieldCondition(
+                    key="document_id",
+                    match=rest_models.MatchValue(value=document_id.strip()),
+                )
+            )
+
+        query_filter = rest_models.Filter(must=must_conditions)
+
+        try:
+            # Modern qdrant-client uses query_points, legacy / mocks may use search
+            if hasattr(self.client, "query_points"):
+                response = self.client.query_points(
+                    collection_name=target_collection,
+                    query=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                )
+                scored_points = response.points
+            elif hasattr(self.client, "search"):
+                scored_points = self.client.search(
+                    collection_name=target_collection,
+                    query_vector=query_vector,
+                    query_filter=query_filter,
+                    limit=top_k,
+                    score_threshold=score_threshold,
+                    with_payload=True,
+                )
+            else:
+                raise VectorStoreError("Qdrant client does not support query_points or search API.")
+
+            results: List[Dict[str, Any]] = []
+            for p in scored_points:
+                results.append({
+                    "id": str(p.id),
+                    "score": float(p.score),
+                    "payload": p.payload or {},
+                })
+            return results
+
+        except Exception as e:
+            sanitized = str(e).replace("\\", "/").split(":")[-1].strip()
+            logger.error(
+                f"Vector search failed in '{target_collection}' for user '{user_id}': {sanitized}"
+            )
+            raise VectorStoreError(f"Vector search failed: {sanitized}") from e
+
     def delete_points(
         self,
         point_ids: List[str],

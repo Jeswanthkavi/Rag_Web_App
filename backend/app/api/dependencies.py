@@ -17,6 +17,7 @@ from backend.app.services.document_service import DocumentService
 from backend.app.chunking.service import ChunkingService
 from backend.app.embeddings.service import EmbeddingService
 from backend.app.vectorstore.service import VectorStoreService
+from backend.app.retrieval.service import RetrievalService
 
 settings = get_settings()
 
@@ -71,6 +72,13 @@ def get_document_service(
 ) -> DocumentService:
     """Dependency for providing an instance of DocumentService."""
     return DocumentService(doc_repo=doc_repo, vector_service=vector_service)
+
+
+def get_retrieval_service(
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+) -> RetrievalService:
+    """Dependency for providing an instance of RetrievalService."""
+    return RetrievalService(embedding_service=embedding_service)
 
 
 def get_current_user(

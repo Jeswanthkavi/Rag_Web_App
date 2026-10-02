@@ -109,21 +109,73 @@ User Query → Query Rewriting / History Enrichment → Dense Vector Query
 
 ---
 
-## 3. Retrieval & Synthesis Pipeline Stages
+## 3. Semantic Retrieval & Similarity Search (Phase 11 Specification)
 
-### Stage 1: Query Preprocessing & Multi-turn Query Rewriting
-- Resolves pronouns and conversation context from chat history into a standalone search query.
+### Stage 1: Query Validation & Sanitization
+- **Non-Empty / Whitespace Check**: Discards empty or whitespace-only queries immediately, raising `RetrievalValidationError`.
+- **Length Bounding**: Enforces configurable `max_query_length` (default 1000 characters).
+- **Whitespace Normalization**: Trims leading and trailing whitespace.
 
-### Stage 2: Tenant-Isolated Vector Search
-- Qdrant cosine similarity search strictly scoped with `user_id` filter.
-- Configurable `top_k` and `score_threshold`.
+### Stage 2: Query Embedding Generation
+- Reuses Phase 9 `EmbeddingService` (`sentence-transformers/all-MiniLM-L6-v2`).
+- Produces a single normalized 384-dimensional dense vector (`query_vector = embed_text(query)`).
 
-### Stage 3: Reranking (Optional / Stage 2 Retrieval)
-- Cross-encoder reranker scores candidate chunks against query for fine-grained semantic relevance.
+### Stage 3: Strict Multi-Tenant Qdrant Vector Search
+- **Mandatory Tenant Filter**: Every query applies a hard filter on `user_id == authenticated_user_id`:
+  ```python
+  must = [FieldCondition(key="user_id", match=MatchValue(value=user_id))]
+  ```
+- **Optional Document Filter**: If a `document_id` is supplied:
+  ```python
+  must.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+  ```
+- Cross-tenant queries with another tenant's `document_id` return 0 results safely without leaking document existence.
+- **Top-K Retrieval**: Configurable `top_k` (default `5`, validated `1 <= top_k <= 100`).
+- **Cosine Distance Scoring**: Qdrant executes cosine distance search, returning scores normalized to `[0.0, 1.0]`.
 
-### Stage 4: Grounded Context Assembly & Generation
-- Strict system prompt instructs Gemini to formulate answers solely based on the provided numbered chunks.
-- If context is insufficient, the system explicitly reports insufficient documentation rather than hallucinating.
+### Stage 4: Similarity Threshold & Payload Validation
+- **Score Filtering**: Filters results having `score >= similarity_threshold` (default `0.5`, configurable per-request).
+- **Payload Schema Validation**:
+  - Validates `chunk_id`, `document_id`, `user_id`, `chunk_text`, `filename`, `file_type`.
+  - Malformed points missing essential fields are skipped safely with warning logs rather than crashing the API.
+  - Payloads with mismatched `user_id` are discarded as security anomalies.
+- **Payload-Derived Citations**: Reads metadata directly from Qdrant payloads to eliminate N+1 relational database lookups.
 
-### Stage 5: Structured Citations
-- Extracts explicit source references linked to document IDs, filenames, page numbers, and exact chunk snippets.
+### Stage 5: Ranking & Structured Response
+- Results are sorted in descending order of similarity score.
+- 1-indexed `rank` (`1, 2, 3, ...`) is assigned after threshold filtering.
+- Returns structured `RetrievalResponse`:
+  ```json
+  {
+    "query": "search text",
+    "results": [
+      {
+        "chunk_id": "uuid",
+        "document_id": "uuid",
+        "user_id": "user-uuid",
+        "chunk_index": 0,
+        "chunk_text": "text content",
+        "page_number": 1,
+        "filename": "doc.pdf",
+        "file_type": ".pdf",
+        "token_count": 45,
+        "score": 0.89,
+        "rank": 1
+      }
+    ],
+    "total_retrieved": 1,
+    "top_k": 5,
+    "similarity_threshold": 0.5
+  }
+  ```
+- **Empty Result Handling**: If no vectors match, returns `results = []` and `total_retrieved = 0` without invoking the LLM.
+
+### Phase 11 Boundaries & Deferred Functionality
+The following capabilities are strictly deferred to subsequent phases:
+- **Phase 12**: Hybrid Search (Dense + Sparse BM25 retrieval).
+- **Phase 13**: Cross-Encoder Reranking (`ms-marco-MiniLM-L-6-v2`).
+- **Phase 14**: Conversational Query Rewriting & History Enrichment.
+- **Phase 15**: Grounded Context Assembly & Gemini LLM Synthesis.
+- **Phase 16**: Structured Citation Extraction & Verification.
+- **Phase 17**: Streaming Chat & Evaluation Framework.
+

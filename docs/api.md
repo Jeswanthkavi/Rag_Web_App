@@ -25,7 +25,50 @@ All endpoints are versioned under `/api/v1` and return standardized JSON respons
 
 ---
 
-## 3. Conversations & Messages (`/api/v1/conversations`)
+## 3. Semantic Retrieval (`/api/v1/retrieval`)
+
+| Method | Endpoint | Description | Auth Required |
+|---|---|---|---|
+| `POST` | `/api/v1/retrieval/search` | Execute tenant-isolated semantic similarity search across document chunks | Yes (Bearer JWT) |
+
+### Request Body (`POST /api/v1/retrieval/search`)
+```json
+{
+  "query": "natural language query string",
+  "top_k": 5,
+  "similarity_threshold": 0.5,
+  "document_id": "optional-document-uuid"
+}
+```
+
+### Response Body (`200 OK`)
+```json
+{
+  "query": "natural language query string",
+  "results": [
+    {
+      "chunk_id": "c1-uuid",
+      "document_id": "doc-uuid",
+      "user_id": "user-uuid",
+      "chunk_index": 0,
+      "chunk_text": "Extracted text content...",
+      "page_number": 1,
+      "filename": "document.pdf",
+      "file_type": ".pdf",
+      "token_count": 45,
+      "score": 0.892,
+      "rank": 1
+    }
+  ],
+  "total_retrieved": 1,
+  "top_k": 5,
+  "similarity_threshold": 0.5
+}
+```
+
+---
+
+## 4. Conversations & Messages (`/api/v1/conversations`)
 
 | Method | Endpoint | Description | Auth Required |
 |---|---|---|---|
